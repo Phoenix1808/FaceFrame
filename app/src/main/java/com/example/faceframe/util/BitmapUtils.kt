@@ -151,18 +151,29 @@ object BitmapUtils {
     // 4. TFLite input buffer
     // ------------------------------------------------------------------
 
-    fun toModelInput(bitmap: Bitmap, inputSize: Int): ByteBuffer {
+    /**
+     * Bitmap -> float32 ByteBuffer, RGB order, [-1, +1] normalized.
+     *
+     * MobileFaceNet ka expected preprocessing: (pixel - 127.5) / 128
+     * Galat normalization = bilkul bekaar embeddings, bina kisi error ke.
+     *
+     * `batchSize` isliye hai ki kuch models fixed batch ke saath export hote
+     * hain. Us case mein wahi chehra har batch slot mein bhar diya jata hai.
+     */
+    fun toModelInput(bitmap: Bitmap, inputSize: Int, batchSize: Int = 1): ByteBuffer {
         val buffer = ByteBuffer
-            .allocateDirect(4 * inputSize * inputSize * 3)   // 4 bytes per float
+            .allocateDirect(4 * batchSize * inputSize * inputSize * 3)   // 4 bytes per float
             .order(ByteOrder.nativeOrder())
 
         val pixels = IntArray(inputSize * inputSize)
         bitmap.getPixels(pixels, 0, inputSize, 0, 0, inputSize, inputSize)
 
-        for (p in pixels) {
-            buffer.putFloat((((p shr 16) and 0xFF) - 127.5f) / 128f)   // R
-            buffer.putFloat((((p shr 8) and 0xFF) - 127.5f) / 128f)    // G
-            buffer.putFloat(((p and 0xFF) - 127.5f) / 128f)            // B
+        repeat(batchSize) {
+            for (p in pixels) {
+                buffer.putFloat((((p shr 16) and 0xFF) - 127.5f) / 128f)   // R
+                buffer.putFloat((((p shr 8) and 0xFF) - 127.5f) / 128f)    // G
+                buffer.putFloat(((p and 0xFF) - 127.5f) / 128f)            // B
+            }
         }
         buffer.rewind()
         return buffer

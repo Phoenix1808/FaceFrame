@@ -49,9 +49,15 @@ object ProcessingConfig {
     //parallelism
     /** Kitne extractor threads chalein. Phone ke cores ke hisaab se, 2-4 ke beech.
      *  4 se zyada ka faayda nahi - hardware video decoder bottleneck ban jata hai. */
-    val EXTRACTOR_WORKERS = Runtime.getRuntime().availableProcessors().coerceIn(2, 4)
+    val EXTRACTOR_WORKERS: Int = run {
+        val heapMb = Runtime.getRuntime().maxMemory() / (1024 * 1024)
+        // Har worker apna MediaMetadataRetriever + decoder buffers rakhta hai.
+        // Kam RAM wale phone pe 4 workers system ko itna dabate hain ki Android
+        // background apps (photo picker tak) maarne lagta hai.
+        if (heapMb < 192) 2 else Runtime.getRuntime().availableProcessors().coerceIn(2, 4)
+    }
 
     /** Kitne decoded frames memory mein queue ho sakte hain.
      *  Buffer se extractors aage kaam karte rehte hain jab tak ML Kit detect kar raha ho. */
-    const val FRAME_BUFFER = 6
+    const val FRAME_BUFFER = 3
 }
