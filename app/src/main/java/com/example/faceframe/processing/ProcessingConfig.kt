@@ -45,4 +45,13 @@ object ProcessingConfig {
     const val COLLAGE_CROP_EXPAND = 2.6f
 
     const val COLLAGE_CROP_VERTICAL_BIAS = 0.12f
+
+    //parallelism
+    /** Kitne extractor threads chalein. Phone ke cores ke hisaab se, 2-4 ke beech.
+     *  4 se zyada ka faayda nahi - hardware video decoder bottleneck ban jata hai. */
+    val EXTRACTOR_WORKERS = Runtime.getRuntime().availableProcessors().coerceIn(2, 4)
+
+    /** Kitne decoded frames memory mein queue ho sakte hain.
+     *  Buffer se extractors aage kaam karte rehte hain jab tak ML Kit detect kar raha ho. */
+    const val FRAME_BUFFER = 6
 }
