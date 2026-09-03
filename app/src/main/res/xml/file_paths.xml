@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- FileProvider isi folder se collage share karega.
+         Direct file:// URI Android 7+ pe FileUriExposedException deta hai. -->
+    <cache-path name="collages" path="collages/" />
+</paths>

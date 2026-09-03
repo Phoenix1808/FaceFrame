@@ -1,0 +1,15 @@
+<resources>
+    <string name="app_name">FaceFrame</string>
+
+    <string name="pick_video">Pick a video</string>
+    <string name="processing">Processing…</string>
+    <string name="people_found">%1$d people found</string>
+    <string name="appearance_count">%1$d appearances</string>
+    <string name="make_collage">Create collage</string>
+
+    <string name="save_to_gallery">Save</string>
+    <string name="share">Share</string>
+    <string name="saved_to_gallery">Saved to gallery</string>
+    <string name="share_collage">Share collage</string>
+    <string name="error_generic">Something went wrong: %1$s</string>
+</resources>
