@@ -1,5 +1,7 @@
 package com.example.faceframe
 
+import android.graphics.Bitmap
+import android.graphics.Rect
 import android.net.Uri
 import android.os.Bundle
 import android.util.Log
@@ -7,6 +9,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.isVisible
 import androidx.lifecycle.lifecycleScope
+import com.example.faceframe.collage.CollageRenderer
 import com.example.faceframe.databinding.ActivityMainBinding
 import com.example.faceframe.model.FaceSample
 import com.example.faceframe.model.Person
@@ -63,14 +66,24 @@ class MainActivity : AppCompatActivity() {
 
             binding.progress.isVisible = false
             binding.pickButton.isEnabled = true
-            binding.status.text = buildString {
-                append(result.people.size).append(" people").append('\n')
-                result.people.forEach { p ->
-                    append(p.label).append(" — ")
-                        .append(p.appearanceCount).append(" appearances").append('\n')
-                }
-                append("%.1fs".format(seconds))
-            }
+            showCollage(result)
+            binding.status.text = "%d people · %d appearances · %.1fs".format(
+                result.people.size,
+                result.people.sumOf { it.appearanceCount },
+                seconds
+            )
+        }
+    }
+
+    /** ImageView par tap karke collage aur debug sheet ke beech switch karo. */
+    private fun showCollage(result: Result) {
+        var showingCollage = true
+        binding.collage.setImageBitmap(result.collage)
+        binding.collage.setOnClickListener {
+            showingCollage = !showingCollage
+            binding.collage.setImageBitmap(
+                if (showingCollage) result.collage else result.debugSheet
+            )
         }
     }
 
@@ -79,7 +92,9 @@ class MainActivity : AppCompatActivity() {
         val framesDone: Int,
         val facesKept: Int,
         val facesBlurred: Int,
-        val people: List<Person>
+        val people: List<Person>,
+        val collage: Bitmap,
+        val debugSheet: Bitmap
     )
 
     /** Saara bhaari kaam background thread pe — main thread free rehta hai. */
@@ -102,7 +117,9 @@ class MainActivity : AppCompatActivity() {
 
         try {
             extractor.parallelFrames(uri).collect { frame ->
-                val faces = analyzer.detect(frame.bitmap).filter { analyzer.isUsable(it) }
+                val faces = analyzer.deduplicate(
+                    analyzer.detect(frame.bitmap).filter { analyzer.isUsable(it) }
+                )
 
                 for (face in faces) {
                     // Sharpness face ke area pe naapo, poore frame pe nahi -
@@ -140,7 +157,8 @@ class MainActivity : AppCompatActivity() {
                         smileProbability = face.smilingProbability ?: 0f,
                         leftEyeOpen = face.leftEyeOpenProbability ?: 1f,
                         rightEyeOpen = face.rightEyeOpenProbability ?: 1f,
-                        sharpness = sharpness
+                        sharpness = sharpness,
+                        facesInFrame = faces.size
                     )
                 }
 
@@ -169,7 +187,10 @@ class MainActivity : AppCompatActivity() {
         logTuningGrid(samples)
 
         // ---- STAGE 3b: tracklets -> unique log ----
-        val people = FaceClusterer.cluster(tracklets) { it.embedding }
+        val people = FaceClusterer.cluster(
+            tracklets,
+            cannotMerge = { a, b -> a.overlapsInTime(b) }
+        ) { it.embedding }
             .sortedBy { group -> group.minOf { it.startMs } }
             .mapIndexed { index, group ->
                 val all = group.flatMap { it.samples }.sortedBy { it.timestampMs }
@@ -183,7 +204,18 @@ class MainActivity : AppCompatActivity() {
 
         logResult(samples.size, facesBlurred, people)
 
-        Result(framesDone, samples.size, facesBlurred, people)
+        // ---- PASS 2: har person ka best frame dobara nikaalo, is baar
+        // high resolution me, aur generously crop karo ----
+        val withShots = people.map { attachShot(extractor, uri, it) }
+        val collage = CollageRenderer.render(withShots)
+
+        // DEBUG: har tracklet ka ek tile, taaki aankhon se verify ho sake
+        // ki kaun se tracklets ek hi insaan ke hain.
+        val debugSheet = CollageRenderer.renderDebugSheet(
+            tracklets.map { trackletThumbnail(extractor, uri, it) }
+        )
+
+        Result(framesDone, samples.size, facesBlurred, withShots, collage, debugSheet)
     }
 
     /**
@@ -215,8 +247,11 @@ class MainActivity : AppCompatActivity() {
 
             var threshold = 0.45f
             while (threshold <= 0.76f) {
-                val clusters = FaceClusterer
-                    .cluster(tracklets, threshold = threshold) { it.embedding }
+                val clusters = FaceClusterer.cluster(
+                    tracklets,
+                    threshold = threshold,
+                    cannotMerge = { a, b -> a.overlapsInTime(b) }
+                ) { it.embedding }
                 val appearances = clusters
                     .map { AppearanceCounter.segmentsOf(it).size }
                     .sortedDescending()
@@ -251,6 +286,65 @@ class MainActivity : AppCompatActivity() {
                 v.first(), v[v.size / 10], v[v.size / 2], v[v.size * 9 / 10], v.last()
             )
         )
+    }
+
+    /**
+     * Person ke best frame ko dobara nikaal kar collage-layak tile banata hai.
+     *
+     * Pass 1 me bitmaps turant recycle ho jaati hain (150 frames memory me
+     * rakhna = OOM). Isliye yahan sirf 5 frames dobara nikalte hain -
+     * high resolution me, kyunki ab kharcha bilkul kam hai.
+     */
+    private fun attachShot(extractor: FrameExtractor, uri: Uri, person: Person): Person {
+        val best = person.bestSample
+        val frame = extractor.frameAt(
+            uri, best.timestampMs, ProcessingConfig.COLLAGE_DECODE_HEIGHT
+        ) ?: return person
+
+        // Bounding box pass 1 ki resolution me hai; ye frame bada hai,
+        // isliye box ko usi anupaat me bada karna padega.
+        val scale = frame.height.toFloat() / best.frameHeight
+        val box = Rect(
+            (best.boundingBox.left * scale).toInt(),
+            (best.boundingBox.top * scale).toInt(),
+            (best.boundingBox.right * scale).toInt(),
+            (best.boundingBox.bottom * scale).toInt()
+        )
+
+        // Assignment: "Do not crop tightly to the detected face bounding box."
+        val shot = BitmapUtils.cropGenerously(
+            source = frame,
+            faceRect = box,
+            expandFactor = ProcessingConfig.COLLAGE_CROP_EXPAND,
+            verticalBias = ProcessingConfig.COLLAGE_CROP_VERTICAL_BIAS
+        )
+        frame.recycle()
+        return person.copy(representativeShot = shot)
+    }
+
+    /** Debug sheet ka ek tile: tracklet ka best frame + uska samay. */
+    private fun trackletThumbnail(
+        extractor: FrameExtractor,
+        uri: Uri,
+        tracklet: Tracklet
+    ): Pair<Bitmap?, String> {
+        val best = ShotScorer.bestOf(tracklet.samples)
+        val caption = "%.1f-%.1fs".format(tracklet.startMs / 1000f, tracklet.endMs / 1000f)
+
+        val frame = extractor.frameAt(
+            uri, best.timestampMs, ProcessingConfig.DEBUG_DECODE_HEIGHT
+        ) ?: return null to caption
+
+        val scale = frame.height.toFloat() / best.frameHeight
+        val box = Rect(
+            (best.boundingBox.left * scale).toInt(),
+            (best.boundingBox.top * scale).toInt(),
+            (best.boundingBox.right * scale).toInt(),
+            (best.boundingBox.bottom * scale).toInt()
+        )
+        val shot = BitmapUtils.cropGenerously(frame, box, 1.9f, 0.08f)
+        frame.recycle()
+        return BitmapUtils.scaleToWidth(shot, 320) to caption
     }
 
     private fun logResult(facesKept: Int, facesBlurred: Int, people: List<Person>) {

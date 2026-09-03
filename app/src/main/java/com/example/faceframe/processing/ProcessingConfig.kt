@@ -32,7 +32,7 @@ object ProcessingConfig {
      * Ye value KISI BHI video par chalti hai - ye "5" nahi jaanti, ye sirf
      * "kitna milna same maana jaye" jaanti hai.
      */
-    const val SIMILARITY_THRESHOLD = 0.50f
+    const val SIMILARITY_THRESHOLD = 0.45f
     const val MIN_SAMPLES_PER_PERSON = 3
 
     const val GAP_TOLERANCE_MS = 700L
@@ -43,6 +43,14 @@ object ProcessingConfig {
      * Isse tracking chalti hai - aur yahi do saath khade logon ko alag
      * rakhta hai, kyunki unke boxes screen pe alag jagah hote hain.
      */
+    /**
+     * Ek hi frame ke do boxes itna overlap karein to wo EK hi chehra hai,
+     * do nahi. ML Kit kabhi-kabhi ek chehre ke liye kai boxes deta hai;
+     * un duplicates se phantom tracklets bante hain jo baad me alag log
+     * maan liye jaate hain.
+     */
+    const val DUPLICATE_FACE_IOU = 0.45f
+
     const val TRACK_MIN_IOU = 0.25f
 
     /**
@@ -54,7 +62,7 @@ object ProcessingConfig {
      * box purane se ~80% overlap karta hai - IoU akela cut nahi pakad sakta.
      * Chehra badla ya nahi, ye sirf embedding bata sakta hai.
      */
-    const val TRACK_MIN_SIMILARITY = 0.55f
+    const val TRACK_MIN_SIMILARITY = 0.65f
     const val MIN_FRAMES_PER_SEGMENT = 2
 
 
@@ -67,6 +75,16 @@ object ProcessingConfig {
     //condn for cropped face as a penalty
     const val CLIPPED_FACE_PENALTY = 0.35f
 
+    /**
+     * Aise frame par penalty jisme ek se zyada chehre hain.
+     *
+     * Assignment: "Prefer a source frame where the full face is visible."
+     * Do log saath hon to generous crop me doosra banda bhi aa jaata hai,
+     * aur collage tile me do chehre dikhte hain. Agar us insaan ka koi
+     * akela frame maujood hai, wahi behtar tile banayega.
+     */
+    const val SHARED_FRAME_PENALTY = 0.30f
+
     const val SHARPNESS_REFERENCE = 300.0
 
     /** Face frame ka itna hissa ghere to size score poora. Isse bada = 1.0 hi. */
@@ -74,6 +92,16 @@ object ProcessingConfig {
 
     /** Upar/neeche dekhne ki limit, frontality score normalize karne ke liye. */
     const val MAX_HEAD_PITCH = 30f
+
+    /**
+     * Collage tile ke liye frame is height par dobara nikalte hain.
+     * Analysis 720p par hota hai (tez), par collage me pixels chahiye -
+     * aur pass 2 me sirf 5 frames nikalne hain, to kharcha kuch bhi nahi.
+     */
+    const val COLLAGE_DECODE_HEIGHT = 1440
+
+    /** Debug contact sheet ke tiles chhote hote hain, kam resolution kaafi hai. */
+    const val DEBUG_DECODE_HEIGHT = 720
 
     const val COLLAGE_CROP_EXPAND = 2.6f
 

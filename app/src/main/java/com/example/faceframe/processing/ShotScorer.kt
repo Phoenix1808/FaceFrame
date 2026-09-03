@@ -25,7 +25,11 @@ object ShotScorer {
                     ProcessingConfig.W_SMILE * sample.smileProbability
 
         // Kata hua chehra kitna bhi sharp ho, collage tile mein bura lagta hai.
-        val penalty = if (sample.isClipped) ProcessingConfig.CLIPPED_FACE_PENALTY else 0f
+        var penalty = if (sample.isClipped) ProcessingConfig.CLIPPED_FACE_PENALTY else 0f
+
+        // Do log ek frame me = tile me dono aa jayenge. Agar is insaan ka
+        // koi akela frame hai, wahi chuno.
+        if (sample.facesInFrame > 1) penalty += ProcessingConfig.SHARED_FRAME_PENALTY
 
         return (score - penalty).coerceIn(0f, 1f)
     }

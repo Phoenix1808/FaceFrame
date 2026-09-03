@@ -24,7 +24,14 @@ data class FaceSample(
     val leftEyeOpen: Float,
     val rightEyeOpen: Float,
 
-    val sharpness : Double
+    val sharpness : Double,
+
+    /**
+     * Is frame me kul kitne chehre mile the.
+     * 1 se zyada = generous crop me doosra banda ghus sakta hai,
+     * isliye ShotScorer aise frames ko peeche rakhta hai.
+     */
+    val facesInFrame : Int = 1
     ){
     val eyesOpenScore: Float
         get() = min(leftEyeOpen,rightEyeOpen)

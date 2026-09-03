@@ -34,6 +34,7 @@ object FaceClusterer {
         items: List<T>,
         threshold: Float = ProcessingConfig.SIMILARITY_THRESHOLD,
         minClusterSize: Int = 1,
+        cannotMerge: (T, T) -> Boolean = { _, _ -> false },
         embeddingOf: (T) -> FloatArray
     ): List<List<T>> {
         if (items.isEmpty()) return emptyList()
@@ -48,6 +49,15 @@ object FaceClusterer {
                 pairSim[i][j] = s
                 pairSim[j][i] = s
             }
+        }
+
+        // HARD CONSTRAINT: kuch jodiyan kabhi ek nahi ho sakti, chahe unke
+        // embeddings kitne bhi milte hon. Do tracklets jo ek hi samay chal
+        // rahe hain, pakka do alag log hain - ek insaan ek waqt me do jagah
+        // nahi ho sakta. Ye baat model ke andaze se kahin zyada pakki hai,
+        // aur yahi wo galti rokti hai jahan milte-julte chehre jud jaate hain.
+        val blocked = Array(n) { i ->
+            BooleanArray(n) { j -> i != j && cannotMerge(items[i], items[j]) }
         }
 
         val members = MutableList(n) { mutableListOf(it) }
@@ -68,6 +78,7 @@ object FaceClusterer {
                 if (!alive[a]) continue
                 for (b in a + 1 until n) {
                     if (!alive[b]) continue
+                    if (blocked[a][b]) continue          // ek waqt me do jagah nahi
                     val avg = simSum[a][b] / (members[a].size * members[b].size)
                     if (avg > bestAvg) {
                         bestAvg = avg
@@ -85,6 +96,13 @@ object FaceClusterer {
                 if (!alive[c] || c == bestA) continue
                 simSum[bestA][c] += simSum[bestB][c]
                 simSum[c][bestA] = simSum[bestA][c]
+
+                // Constraint bhi wirasat me milti hai: agar B, C ke saath nahi
+                // ban sakta tha, to A+B bhi C ke saath nahi ban sakta.
+                if (blocked[bestB][c]) {
+                    blocked[bestA][c] = true
+                    blocked[c][bestA] = true
+                }
             }
         }
 

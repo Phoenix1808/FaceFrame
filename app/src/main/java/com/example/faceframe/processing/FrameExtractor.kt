@@ -136,6 +136,29 @@ class FrameExtractor(private val context: Context) {
         }.joinAll()
     }.buffer(ProcessingConfig.FRAME_BUFFER)   // extractors consumer ka intezaar na karein
 
+    /**
+     * PASS 2 - ek hi frame, high resolution me.
+     *
+     * Analysis (pass 1) 720p par hoti hai kyunki 150 frames nikalne hain.
+     * Collage ke liye sirf ek frame per person chahiye, isliye wahan
+     * resolution ka kharcha uthaya ja sakta hai - aur tile jitni sharp
+     * hogi, collage utna acha lagega.
+     */
+    fun frameAt(uri: Uri, timestampMs: Long, maxHeight: Int): Bitmap? {
+        val retriever = MediaMetadataRetriever()
+        return try {
+            retriever.setDataSource(context, uri)
+            val info = readInfoFrom(retriever)
+            grabFrame(
+                retriever,
+                timestampMs * 1000L,
+                targetSize(info.displayWidth, info.displayHeight, maxHeight)
+            )
+        } finally {
+            retriever.release()
+        }
+    }
+
     // ------------------------------------------------------------------
 
     private fun readInfoFrom(retriever: MediaMetadataRetriever): VideoInfo {
@@ -161,12 +184,16 @@ class FrameExtractor(private val context: Context) {
         )
     }
 
-    /** Aspect ratio bachate hue DECODE_MAX_HEIGHT tak chhota karo. */
-    private fun targetSize(width: Int, height: Int): Size? {
+    /** Aspect ratio bachate hue maxHeight tak chhota karo. */
+    private fun targetSize(
+        width: Int,
+        height: Int,
+        maxHeight: Int = ProcessingConfig.DECODE_MAX_HEIGHT
+    ): Size? {
         if (width <= 0 || height <= 0) return null
-        if (height <= ProcessingConfig.DECODE_MAX_HEIGHT) return null   // already chhota
-        val ratio = ProcessingConfig.DECODE_MAX_HEIGHT.toFloat() / height
-        return Size((width * ratio).toInt().coerceAtLeast(1), ProcessingConfig.DECODE_MAX_HEIGHT)
+        if (height <= maxHeight) return null                 // already chhota
+        val ratio = maxHeight.toFloat() / height
+        return Size((width * ratio).toInt().coerceAtLeast(1), maxHeight)
     }
 
     /**

@@ -75,5 +75,30 @@ class FaceAnalyzer : Closeable {
         return true
     }
 
+    /**
+     * Ek hi chehre ke kai boxes hata deta hai.
+     *
+     * ML Kit kabhi-kabhi ek chehre par 2-3 overlapping boxes deta hai.
+     * Har box ek alag detection ban jaata hai, phir alag tracklet, aur
+     * kyunki wo tracklets ek hi samay chal rahe hote hain, clustering
+     * unhe "do alag log" maan leti hai (kyunki ek insaan ek waqt me do
+     * jagah nahi ho sakta). Natija: ek hi banda do-teen baar collage me.
+     *
+     * Sabse bade box ko rakhte hain - usme poora chehra hone ki sambhavna
+     * sabse zyada hai.
+     */
+    fun deduplicate(faces: List<Face>): List<Face> {
+        if (faces.size < 2) return faces
+
+        val kept = mutableListOf<Face>()
+        for (face in faces.sortedByDescending { it.boundingBox.width() * it.boundingBox.height() }) {
+            val isDuplicate = kept.any {
+                iou(it.boundingBox, face.boundingBox) > ProcessingConfig.DUPLICATE_FACE_IOU
+            }
+            if (!isDuplicate) kept += face
+        }
+        return kept
+    }
+
     override fun close() = detector.close()
 }

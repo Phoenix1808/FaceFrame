@@ -18,6 +18,15 @@ class Tracklet(val samples: List<FaceSample>) {
     val frameCount: Int get() = samples.size
 
     /**
+     * Kya ye do tracklets ek hi samay chal rahe the?
+     *
+     * Agar haan, to ye pakka DO ALAG log hain - ek insaan ek waqt me do
+     * jagah nahi ho sakta. Clustering ise ek hard rule ki tarah use karti hai.
+     */
+    fun overlapsInTime(other: Tracklet): Boolean =
+        startMs <= other.endMs && other.startMs <= endMs
+
+    /**
      * Saare frames ke embeddings ka average (L2-normalized).
      *
      * YAHI is poore design ka faayda hai. Ek frame ka embedding lighting,
@@ -127,18 +136,19 @@ object FaceTracker {
             .sortedBy { it.startMs }
     }
 
-    /**
-     * Intersection over Union - do boxes kitne overlap karte hain (0..1).
-     * 0 = bilkul alag jagah, 1 = bilkul same jagah.
-     */
-    private fun iou(a: Rect, b: Rect): Float {
-        val w = minOf(a.right, b.right) - maxOf(a.left, b.left)
-        val h = minOf(a.bottom, b.bottom) - maxOf(a.top, b.top)
-        if (w <= 0 || h <= 0) return 0f
+}
 
-        val intersection = w.toFloat() * h
-        val union = a.width().toFloat() * a.height() +
-                b.width().toFloat() * b.height() - intersection
-        return if (union <= 0f) 0f else intersection / union
-    }
+/**
+ * Intersection over Union - do boxes kitne overlap karte hain (0..1).
+ * 0 = bilkul alag jagah, 1 = bilkul same jagah.
+ */
+internal fun iou(a: Rect, b: Rect): Float {
+    val w = minOf(a.right, b.right) - maxOf(a.left, b.left)
+    val h = minOf(a.bottom, b.bottom) - maxOf(a.top, b.top)
+    if (w <= 0 || h <= 0) return 0f
+
+    val intersection = w.toFloat() * h
+    val union = a.width().toFloat() * a.height() +
+            b.width().toFloat() * b.height() - intersection
+    return if (union <= 0f) 0f else intersection / union
 }
