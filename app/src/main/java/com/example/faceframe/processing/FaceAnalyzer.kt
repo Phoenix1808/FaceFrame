@@ -12,7 +12,6 @@ import kotlinx.coroutines.tasks.await
 import java.io.Closeable
 import kotlin.math.abs
 
-/** Aankhon ke coordinates — face alignment ke liye. */
 val Face.leftEyePosition: PointF?
     get() = getLandmark(FaceLandmark.LEFT_EYE)?.position
 
@@ -20,55 +19,44 @@ val Face.rightEyePosition: PointF?
     get() = getLandmark(FaceLandmark.RIGHT_EYE)?.position
 
 /**
- * ML Kit face detection ka wrapper.
+ * ML Kit wrapper. Says where a face is and what it looks like — never whose
+ * it is; that is FaceEmbedder's job.
  *
- * Ye sirf batata hai ki chehra KAHAN hai aur kaisa dikh raha hai —
- * chehra KISKA hai ye nahi. Wo kaam FaceEmbedder ka hai.
- *
- * `Closeable` isliye ki detector native resources rakhta hai;
- * `close()` na karo toh memory leak.
+ * Closeable because the detector holds native resources.
  */
 class FaceAnalyzer : Closeable {
 
     private val detector: FaceDetector = FaceDetection.getClient(
         FaceDetectorOptions.Builder()
-            // Offline processing hai, real-time nahi — accuracy chuni.
-            // FAST mode chhote aur side-facing faces miss karta hai,
-            // aur har miss = galat appearance count.
+            // This runs offline over a file, not on a camera preview, so accuracy
+            // beats speed. FAST mode drops small and side-facing faces, and every
+            // miss is a wrong appearance count.
             .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_ACCURATE)
 
-            // Aankhon ke points → face alignment → better embeddings
+            // Eye positions, used to straighten the face before embedding.
             .setLandmarkMode(FaceDetectorOptions.LANDMARK_MODE_ALL)
 
-            // ⭐ Iske bina smilingProbability aur eyeOpenProbability NULL aate hain.
-            // Assignment inhe explicitly maangta hai.
+            // Without this, smilingProbability and eyeOpenProbability come back
+            // null — and the assignment asks for both by name.
             .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_ALL)
 
-            // 130+ contour points chahiye nahi, aur ye slow hai
+            // 130-odd contour points we would never look at, and slow.
             .setContourMode(FaceDetectorOptions.CONTOUR_MODE_NONE)
 
-            // Background ke chhote-dhundhle chehre yahin filter ho jaate hain
             .setMinFaceSize(ProcessingConfig.MIN_FACE_SIZE_RATIO)
             .build()
     )
 
-    /**
-     * Ek frame mein saare chehre dhoondo.
-     *
-     * rotation = 0 kyunki MediaMetadataRetriever already rotation
-     * metadata apply karke bitmap deta hai.
-     */
+    // rotation = 0 because MediaMetadataRetriever already applies the video's
+    // rotation metadata to the bitmap it hands back.
     suspend fun detect(bitmap: Bitmap): List<Face> {
         val image = InputImage.fromBitmap(bitmap, 0)
         return detector.process(image).await()
     }
 
-    /**
-     * Sasta geometric filter — embedding nikalne se PEHLE chalao.
-     *
-     * Bahut chhota face = pixels hi nahi hain identity ke liye.
-     * Bahut zyada yaw = profile view, embedding bharosemand nahi rehta.
-     */
+    // Cheap geometric filter, run before spending 35 ms on an embedding.
+    // Too small and there are not enough pixels to identify anyone; too much
+    // yaw and it is a profile shot the embedding cannot be trusted on.
     fun isUsable(face: Face): Boolean {
         if (face.boundingBox.width() < ProcessingConfig.MIN_FACE_WIDTH_PX) return false
         if (abs(face.headEulerAngleY) > ProcessingConfig.MAX_HEAD_YAW) return false
@@ -76,16 +64,15 @@ class FaceAnalyzer : Closeable {
     }
 
     /**
-     * Ek hi chehre ke kai boxes hata deta hai.
+     * Drops duplicate boxes on the same face.
      *
-     * ML Kit kabhi-kabhi ek chehre par 2-3 overlapping boxes deta hai.
-     * Har box ek alag detection ban jaata hai, phir alag tracklet, aur
-     * kyunki wo tracklets ek hi samay chal rahe hote hain, clustering
-     * unhe "do alag log" maan leti hai (kyunki ek insaan ek waqt me do
-     * jagah nahi ho sakta). Natija: ek hi banda do-teen baar collage me.
+     * ML Kit occasionally returns two or three overlapping boxes for one face.
+     * Each becomes its own detection, then its own tracklet, and because those
+     * tracklets run at the same instant the clustering constraint decides they
+     * must be different people — so one person shows up two or three times in
+     * the collage. Took a while to work that one out.
      *
-     * Sabse bade box ko rakhte hain - usme poora chehra hone ki sambhavna
-     * sabse zyada hai.
+     * Keeps the largest box, which is most likely to hold the whole face.
      */
     fun deduplicate(faces: List<Face>): List<Face> {
         if (faces.size < 2) return faces

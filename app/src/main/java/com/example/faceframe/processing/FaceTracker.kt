@@ -4,36 +4,21 @@ import android.graphics.Rect
 import com.example.faceframe.model.FaceSample
 import kotlin.math.sqrt
 
-/**
- * Ek insaan ka ek continuous visible segment - yaani ek "appearance".
- *
- * Assignment ki definition se seedha match: "An appearance is one continuous
- * visible segment: it starts when a person's face becomes clearly visible and
- * ends when it is no longer clearly visible."
- */
+/** One continuous visible segment of one person — one "appearance". */
 class Tracklet(val samples: List<FaceSample>) {
 
     val startMs: Long get() = samples.first().timestampMs
     val endMs: Long get() = samples.last().timestampMs
     val frameCount: Int get() = samples.size
 
-    /**
-     * Kya ye do tracklets ek hi samay chal rahe the?
-     *
-     * Agar haan, to ye pakka DO ALAG log hain - ek insaan ek waqt me do
-     * jagah nahi ho sakta. Clustering ise ek hard rule ki tarah use karti hai.
-     */
+    // Overlapping tracklets are definitely different people.
+    // Nobody is in two places at once.
     fun overlapsInTime(other: Tracklet): Boolean =
         startMs <= other.endMs && other.startMs <= endMs
 
-    /**
-     * Saare frames ke embeddings ka average (L2-normalized).
-     *
-     * YAHI is poore design ka faayda hai. Ek frame ka embedding lighting,
-     * pose aur blur se hilta rehta hai. Saat frames ka average lene par
-     * wo random galtiyan aapas mein cancel ho jaati hain, aur us insaan ki
-     * asli pehchaan bachi rehti hai.
-     */
+    // Mean of the frames' embeddings, re-normalised. This is the whole point of
+    // building tracklets: a single frame's embedding moves around with lighting,
+    // pose and motion blur, and averaging seven of them cancels most of that.
     val embedding: FloatArray by lazy(LazyThreadSafetyMode.NONE) {
         val dim = samples.first().embedding.size
         val sum = FloatArray(dim)
@@ -48,20 +33,7 @@ class Tracklet(val samples: List<FaceSample>) {
     }
 }
 
-/**
- * Frame-dar-frame detections ko tracklets mein jodta hai.
- *
- * Ye clustering se PEHLE chalta hai, aur do bade kaam karta hai:
- *
- *   1. Shor kam karta hai - 137 dagmagate per-frame embeddings ki jagah
- *      ~20 stable averaged embeddings bachte hain. Clustering ke liye
- *      zameen-aasman ka farq.
- *
- *   2. Saath khade logon ko alag rakhta hai - matching sirf embedding se
- *      nahi, bounding box ki JAGAH se bhi hoti hai. 10.2s par jo do chehre
- *      hain wo screen ke alag hisson mein hain, isliye do alag tracklets
- *      banenge - chahe unke embeddings thode mile-jule hon.
- */
+/** Links per-frame detections into tracklets, before any clustering happens. */
 object FaceTracker {
 
     fun build(
@@ -71,22 +43,20 @@ object FaceTracker {
     ): List<Tracklet> {
         if (samples.isEmpty()) return emptyList()
 
-        // Frames parallel extraction se bina order ke aate hain.
+        // Parallel extraction hands frames back out of order.
         val byTime = samples.groupBy { it.timestampMs }.toSortedMap()
 
         val open = mutableListOf<MutableList<FaceSample>>()
         val finished = mutableListOf<MutableList<FaceSample>>()
 
         for ((time, detections) in byTime) {
-            // Jo tracklets bahut der se nahi dikhe, unhe band kar do.
-            // Ye wahi gap tolerance hai jo appearance boundary decide karti hai.
             val stale = open.filter {
                 time - it.last().timestampMs > ProcessingConfig.GAP_TOLERANCE_MS
             }
             finished += stale
             open.removeAll(stale.toSet())
 
-            // Snapshot lete hain kyunki neeche `open` mein naye tracklets add honge
+            // Snapshot, because new tracklets get appended to `open` below.
             val candidates = open.toList()
             val taken = HashSet<Int>()
 
@@ -98,15 +68,14 @@ object FaceTracker {
                     if (i in taken) continue
                     val last = candidates[i].last()
 
-                    // Gate 1 - position: do alag log ek hi jagah nahi ho sakte.
-                    // Yahi ek frame ke do chehron ko alag rakhta hai.
                     val overlap = iou(last.boundingBox, detection.boundingBox)
                     if (overlap < minIou) continue
 
-                    // Gate 2 - identity: yahi CUT pakadta hai.
-                    // Portrait video me har banda beech me same size me framed
-                    // hota hai, to cut ke baad bhi IoU high aata hai. Chehra
-                    // badla ya nahi, ye sirf embedding bata sakta hai.
+                    // Both gates matter, for opposite reasons. Position alone
+                    // cannot see a cut: in a portrait video everyone is framed
+                    // dead centre at a similar size, so the boxes still overlap
+                    // heavily after the camera cuts to someone else. Only the
+                    // embedding notices that the face changed.
                     val similarity = FaceEmbedder.cosineSimilarity(
                         last.embedding, detection.embedding
                     )
@@ -120,28 +89,24 @@ object FaceTracker {
                 }
 
                 if (bestIndex >= 0) {
-                    candidates[bestIndex] += detection      // chalte tracklet mein jodo
+                    candidates[bestIndex] += detection
                     taken += bestIndex
                 } else {
-                    open += mutableListOf(detection)        // naya tracklet
+                    open += mutableListOf(detection)
                 }
             }
         }
         finished += open
 
-        // Ek-do frame ka tracklet aksar false detection hota hai.
+        // One- or two-frame tracklets are usually a bad detection.
         return finished
             .filter { it.size >= ProcessingConfig.MIN_FRAMES_PER_SEGMENT }
             .map { Tracklet(it.sortedBy { s -> s.timestampMs }) }
             .sortedBy { it.startMs }
     }
-
 }
 
-/**
- * Intersection over Union - do boxes kitne overlap karte hain (0..1).
- * 0 = bilkul alag jagah, 1 = bilkul same jagah.
- */
+// Intersection over union, 0 (disjoint) to 1 (identical).
 internal fun iou(a: Rect, b: Rect): Float {
     val w = minOf(a.right, b.right) - maxOf(a.left, b.left)
     val h = minOf(a.bottom, b.bottom) - maxOf(a.top, b.top)

@@ -2,8 +2,7 @@ package com.example.faceframe.model
 
 import android.graphics.Bitmap
 
-//single cluster equals single person
-//contains all of it's facesample, apperarnceCount , List<Segmnet>, bestSample
+/** One continuous stretch where a person is visible. */
 
 data class Segment(
     val startMs : Long,

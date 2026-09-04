@@ -1,41 +1,53 @@
 package com.example.faceframe
 
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
-import android.graphics.Rect
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
-import android.util.Log
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.core.view.isVisible
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
-import com.example.faceframe.collage.CollageRenderer
+import androidx.lifecycle.repeatOnLifecycle
+import com.example.faceframe.collage.MediaSaver
 import com.example.faceframe.databinding.ActivityMainBinding
-import com.example.faceframe.model.FaceSample
-import com.example.faceframe.model.Person
-import com.example.faceframe.processing.AppearanceCounter
-import com.example.faceframe.processing.FaceAnalyzer
-import com.example.faceframe.processing.FaceClusterer
-import com.example.faceframe.processing.FaceEmbedder
-import com.example.faceframe.processing.FaceTracker
-import com.example.faceframe.processing.FrameExtractor
-import com.example.faceframe.processing.ProcessingConfig
-import com.example.faceframe.processing.ShotScorer
-import com.example.faceframe.processing.Tracklet
-import com.example.faceframe.processing.leftEyePosition
-import com.example.faceframe.processing.rightEyePosition
-import com.example.faceframe.util.BitmapUtils
+import com.example.faceframe.model.ProcessingState
+import com.google.android.material.snackbar.Snackbar
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+/**
+ * The whole app is one screen: pick a video, watch it work, look at the
+ * collage, save or share it.
+ *
+ * No processing happens here — that is VideoProcessor, driven by
+ * MainViewModel. This class only turns ProcessingState into pixels.
+ */
 class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
+    private val viewModel: MainViewModel by viewModels()
 
     private val pickVideo = registerForActivityResult(
         ActivityResultContracts.GetContent()
-    ) { uri: Uri? -> uri?.let { analyze(it) } }
+    ) { uri: Uri? -> uri?.let { viewModel.analyze(it) } }
+
+    // Held between asking for the permission and getting an answer.
+    private var pendingSave: (() -> Unit)? = null
+
+    private val requestStoragePermission = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) pendingSave?.invoke() else snack(getString(R.string.permission_denied))
+        pendingSave = null
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -43,390 +55,133 @@ class MainActivity : AppCompatActivity() {
         setContentView(binding.root)
 
         binding.pickButton.setOnClickListener { pickVideo.launch("video/*") }
+
+        // repeatOnLifecycle stops collecting while the screen is in the
+        // background and picks up again on return, so we are not updating views
+        // nobody is looking at.
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                viewModel.state.collect(::render)
+            }
+        }
     }
 
+    private fun render(state: ProcessingState) = when (state) {
+        is ProcessingState.Idle -> Unit
 
-    private fun analyze(uri: Uri) {
-        lifecycleScope.launch { //main thread par hai abhi to initially
-            binding.pickButton.isEnabled = false
-            binding.progress.isVisible = true
-            binding.progress.progress = 0
-            binding.status.text = getString(R.string.processing)
+        is ProcessingState.Analyzing -> showProgress(
+            percent = state.percent,
+            text = getString(
+                R.string.frame_progress,
+                state.framesDone, state.framesTotal, state.facesFound
+            )
+        )
 
-            val startedAt = System.currentTimeMillis()
+        // Both of these are quick, and there is no sensible percentage for
+        // them, so the bar just spins instead of pretending to know.
+        is ProcessingState.Grouping ->
+            showProgress(null, getString(R.string.processing))
 
-            val result = try {
-                runPipeline(uri)
-            } catch (t: Throwable) {
-                showFailure(t)
-                return@launch
-            }
+        is ProcessingState.BuildingCollage ->
+            showProgress(null, getString(R.string.building_collage))
 
-            val seconds = (System.currentTimeMillis() - startedAt) / 1000.0
+        is ProcessingState.Done -> showResult(state)
 
+        is ProcessingState.Failed -> {
             binding.progress.isVisible = false
             binding.pickButton.isEnabled = true
-            showCollage(result)
-            binding.status.text = "%d people · %d appearances · %.1fs".format(
-                result.people.size,
-                result.people.sumOf { it.appearanceCount },
-                seconds
-            )
+            binding.status.text = "${state.message}\n(${state.where})"
         }
     }
 
-    /** ImageView par tap karke collage aur debug sheet ke beech switch karo. */
-    private fun showCollage(result: Result) {
-        var showingCollage = true
-        binding.collage.setImageBitmap(result.collage)
-        binding.collage.setOnClickListener {
-            showingCollage = !showingCollage
-            binding.collage.setImageBitmap(
-                if (showingCollage) result.collage else result.debugSheet
-            )
+    private fun showProgress(percent: Int?, text: String) {
+        binding.pickButton.isEnabled = false
+        binding.actions.isVisible = false
+        binding.progress.isVisible = true
+        binding.status.text = text
+
+        if (percent == null) {
+            binding.progress.isIndeterminate = true
+        } else {
+            binding.progress.isIndeterminate = false
+            binding.progress.setProgressCompat(percent, true)
         }
     }
 
-    /** Pipeline ka ek run ka nateeja. */
-    private data class Result(
-        val framesDone: Int,
-        val facesKept: Int,
-        val facesBlurred: Int,
-        val people: List<Person>,
-        val collage: Bitmap,
-        val debugSheet: Bitmap
-    )
-
-    /** Saara bhaari kaam background thread pe — main thread free rehta hai. */
-    private suspend fun runPipeline(uri: Uri): Result = withContext(Dispatchers.Default) {
-        val extractor = FrameExtractor(applicationContext)
-        val analyzer = FaceAnalyzer()
-        val embedder = FaceEmbedder(applicationContext)
-
-        val info = extractor.readInfo(uri)
-        Log.d(
-            TAG, "video: ${info.durationMs}ms  " +
-                    "${info.displayWidth}x${info.displayHeight}  " +
-                    "expecting ${info.expectedFrameCount} frames  " +
-                    "workers=${ProcessingConfig.EXTRACTOR_WORKERS}"
-        )
-
-        val samples = mutableListOf<FaceSample>()
-        var framesDone = 0
-        var facesBlurred = 0
-
-        try {
-            extractor.parallelFrames(uri).collect { frame ->
-                val faces = analyzer.deduplicate(
-                    analyzer.detect(frame.bitmap).filter { analyzer.isUsable(it) }
-                )
-
-                for (face in faces) {
-                    // Sharpness face ke area pe naapo, poore frame pe nahi -
-                    // background sharp ho aur chehra blurry, ye aksar hota hai.
-                    val faceCrop = BitmapUtils.cropGenerously(
-                        source = frame.bitmap,
-                        faceRect = face.boundingBox,
-                        expandFactor = 1f
-                    )
-                    val sharpness = BitmapUtils.laplacianVariance(faceCrop)
-                    faceCrop.recycle()
-
-                    // Assignment: "Blurred whip-pan passes count for nobody."
-                    // Ye frame yahin chhod do - iska embedding bhi kachra hoga
-                    // aur ye ek appearance ko do tukdon mein tod sakta hai.
-                    if (sharpness < ProcessingConfig.BLUR_THRESHOLD) {
-                        facesBlurred++
-                        continue
-                    }
-
-                    samples += FaceSample(
-                        timestampMs = frame.timestampMs,
-                        boundingBox = face.boundingBox,
-                        frameWidth = frame.bitmap.width,
-                        frameHeight = frame.bitmap.height,
-                        embedding = embedder.embed(
-                            frame = frame.bitmap,
-                            faceRect = face.boundingBox,
-                            leftEye = face.leftEyePosition,
-                            rightEye = face.rightEyePosition
-                        ),
-                        yaw = face.headEulerAngleY,
-                        pitch = face.headEulerAngleX,
-                        roll = face.headEulerAngleZ,
-                        smileProbability = face.smilingProbability ?: 0f,
-                        leftEyeOpen = face.leftEyeOpenProbability ?: 1f,
-                        rightEyeOpen = face.rightEyeOpenProbability ?: 1f,
-                        sharpness = sharpness,
-                        facesInFrame = faces.size
-                    )
-                }
-
-                frame.bitmap.recycle()
-                framesDone++
-
-                withContext(Dispatchers.Main) {  ///again on Main for UI
-                    binding.progress.progress =
-                        framesDone * 100 / info.expectedFrameCount.coerceAtLeast(1)
-                    binding.status.text = "Frame $framesDone / ${info.expectedFrameCount}"
-                }
-            }
-        } finally {
-            analyzer.close()
-            embedder.close()
-        }
-
-        logSanityTest(samples)
-        logSharpness(samples)
-
-        // ---- STAGE 3a: per-frame detections -> tracklets ----
-        // Ek tracklet = ek insaan ka ek continuous visible segment.
-        // Clustering ab in par chalegi, per-frame embeddings par nahi.
-        val tracklets = FaceTracker.build(samples)
-        logTracklets(tracklets)
-        logTuningGrid(samples)
-
-        // ---- STAGE 3b: tracklets -> unique log ----
-        val people = FaceClusterer.cluster(
-            tracklets,
-            cannotMerge = { a, b -> a.overlapsInTime(b) }
-        ) { it.embedding }
-            .sortedBy { group -> group.minOf { it.startMs } }
-            .mapIndexed { index, group ->
-                val all = group.flatMap { it.samples }.sortedBy { it.timestampMs }
-                Person(
-                    id = index + 1,
-                    samples = all,
-                    segments = AppearanceCounter.segmentsOf(group),
-                    bestSample = ShotScorer.bestOf(all)
-                )
-            }
-
-        logResult(samples.size, facesBlurred, people)
-
-        // ---- PASS 2: har person ka best frame dobara nikaalo, is baar
-        // high resolution me, aur generously crop karo ----
-        val withShots = people.map { attachShot(extractor, uri, it) }
-        val collage = CollageRenderer.render(withShots)
-
-        // DEBUG: har tracklet ka ek tile, taaki aankhon se verify ho sake
-        // ki kaun se tracklets ek hi insaan ke hain.
-        val debugSheet = CollageRenderer.renderDebugSheet(
-            tracklets.map { trackletThumbnail(extractor, uri, it) }
-        )
-
-        Result(framesDone, samples.size, facesBlurred, withShots, collage, debugSheet)
-    }
-
-    /**
-     * Ek hi run se saare thresholds ka nateeja.
-     *
-     * Extraction + detection + embedding = 100 second. Clustering = millisecond.
-     * Isliye 100 second ka data ek baar nikaal kar usi par 17 thresholds
-     * chala lete hain - warna har threshold ke liye poora video dobara
-     * process karna padta.
-     *
-     * Sample 1 ka expected: 5 people, har ek 4 appearances (kul 20).
-     * Jis threshold par "5 people" aur saare "4" aayein - wahi sahi hai.
-     */
-    /**
-     * Dono tuning knobs ka poora grid, ek hi run me.
-     *
-     * Video se frames nikalna + detect + embed = ~100 second. Tracking aur
-     * clustering wahi memory me pade samples par chalti hain - millisecond ka
-     * kaam. Isliye 100 second ka data ek baar nikaal kar uspar 35 combinations
-     * chala lete hain. Warna 35 x 100s = ek ghanta.
-     *
-     * Sample 1 ka expected: 5 people, har ek 4 appearances (total 20).
-     */
-    private fun logTuningGrid(samples: List<FaceSample>) {
-        Log.d(TAG, "===== TRACKING x CLUSTERING GRID  (target: 5 people, [4,4,4,4,4]) =====")
-        for (trackSim in listOf(0.55f, 0.65f, 0.70f, 0.75f, 0.80f)) {
-            val tracklets = FaceTracker.build(samples, minSimilarity = trackSim)
-            Log.d(TAG, "-- trackSim=%.2f -> %d tracklets".format(trackSim, tracklets.size))
-
-            var threshold = 0.45f
-            while (threshold <= 0.76f) {
-                val clusters = FaceClusterer.cluster(
-                    tracklets,
-                    threshold = threshold,
-                    cannotMerge = { a, b -> a.overlapsInTime(b) }
-                ) { it.embedding }
-                val appearances = clusters
-                    .map { AppearanceCounter.segmentsOf(it).size }
-                    .sortedDescending()
-                Log.d(
-                    TAG, "      t=%.2f -> %d people %s total=%d".format(
-                        threshold, clusters.size, appearances, appearances.sum()
-                    )
-                )
-                threshold += 0.05f
-            }
-        }
-    }
-
-    /** Tracklets khud sahi bane? Sample 1 mein ~20 aane chahiye. */
-    private fun logTracklets(tracklets: List<Tracklet>) {
-        Log.d(TAG, "===== TRACKLETS (${tracklets.size}) =====")
-        for (t in tracklets) {
-            Log.d(TAG, "   ${t.startMs}-${t.endMs}ms   ${t.frameCount} frames")
-        }
-    }
-
-    /**
-     * Sharpness ki distribution - BLUR_THRESHOLD sahi jagah par hai?
-     * Abhi 24 detections blurry maan kar hataye gaye. Agar wo asli chehre the
-     * to appearances toot sakti hain.
-     */
-    private fun logSharpness(samples: List<FaceSample>) {
-        if (samples.isEmpty()) return
-        val v = samples.map { it.sharpness }.sorted()
-        Log.d(
-            TAG, "sharpness (kept): min=%.0f p10=%.0f median=%.0f p90=%.0f max=%.0f".format(
-                v.first(), v[v.size / 10], v[v.size / 2], v[v.size * 9 / 10], v.last()
-            )
-        )
-    }
-
-    /**
-     * Person ke best frame ko dobara nikaal kar collage-layak tile banata hai.
-     *
-     * Pass 1 me bitmaps turant recycle ho jaati hain (150 frames memory me
-     * rakhna = OOM). Isliye yahan sirf 5 frames dobara nikalte hain -
-     * high resolution me, kyunki ab kharcha bilkul kam hai.
-     */
-    private fun attachShot(extractor: FrameExtractor, uri: Uri, person: Person): Person {
-        val best = person.bestSample
-        val frame = extractor.frameAt(
-            uri, best.timestampMs, ProcessingConfig.COLLAGE_DECODE_HEIGHT
-        ) ?: return person
-
-        // Bounding box pass 1 ki resolution me hai; ye frame bada hai,
-        // isliye box ko usi anupaat me bada karna padega.
-        val scale = frame.height.toFloat() / best.frameHeight
-        val box = Rect(
-            (best.boundingBox.left * scale).toInt(),
-            (best.boundingBox.top * scale).toInt(),
-            (best.boundingBox.right * scale).toInt(),
-            (best.boundingBox.bottom * scale).toInt()
-        )
-
-        // Assignment: "Do not crop tightly to the detected face bounding box."
-        val shot = BitmapUtils.cropGenerously(
-            source = frame,
-            faceRect = box,
-            expandFactor = ProcessingConfig.COLLAGE_CROP_EXPAND,
-            verticalBias = ProcessingConfig.COLLAGE_CROP_VERTICAL_BIAS
-        )
-        frame.recycle()
-        return person.copy(representativeShot = shot)
-    }
-
-    /** Debug sheet ka ek tile: tracklet ka best frame + uska samay. */
-    private fun trackletThumbnail(
-        extractor: FrameExtractor,
-        uri: Uri,
-        tracklet: Tracklet
-    ): Pair<Bitmap?, String> {
-        val best = ShotScorer.bestOf(tracklet.samples)
-        val caption = "%.1f-%.1fs".format(tracklet.startMs / 1000f, tracklet.endMs / 1000f)
-
-        val frame = extractor.frameAt(
-            uri, best.timestampMs, ProcessingConfig.DEBUG_DECODE_HEIGHT
-        ) ?: return null to caption
-
-        val scale = frame.height.toFloat() / best.frameHeight
-        val box = Rect(
-            (best.boundingBox.left * scale).toInt(),
-            (best.boundingBox.top * scale).toInt(),
-            (best.boundingBox.right * scale).toInt(),
-            (best.boundingBox.bottom * scale).toInt()
-        )
-        val shot = BitmapUtils.cropGenerously(frame, box, 1.9f, 0.08f)
-        frame.recycle()
-        return BitmapUtils.scaleToWidth(shot, 320) to caption
-    }
-
-    private fun logResult(facesKept: Int, facesBlurred: Int, people: List<Person>) {
-        Log.d(TAG, "===== RESULT =====")
-        Log.d(TAG, "$facesKept faces kept, $facesBlurred rejected as blurry")
-        Log.d(TAG, "${people.size} unique people")
-        for (p in people) {
-            Log.d(
-                TAG, "${p.label}: ${p.appearanceCount} appearances  " +
-                        "(${p.samples.size} frames)  " +
-                        "best@${p.bestSample.timestampMs}ms " +
-                        "score=%.2f".format(ShotScorer.score(p.bestSample))
-            )
-            for (s in p.segments) {
-                Log.d(TAG, "      ${s.startMs}-${s.endMs}ms  ${s.frameCount} frames")
-            }
-        }
-    }
-
-    /**
-     * Kya embeddings sach mein kaam kar rahe hain?
-     *
-     * Sample video khud apna ground truth deta hai:
-     *   SAME  = aas-paas ke frames (200ms fark) -> aksar wahi banda -> HIGH
-     *   DIFF  = ek hi frame ke do chehre        -> pakka alag log   -> LOW
-     * Dono ke beech ka gap hi SIMILARITY_THRESHOLD decide karta hai.
-     */
-    private fun logSanityTest(samples: List<FaceSample>) {
-        val byTime = samples.groupBy { it.timestampMs }
-
-        val singles = byTime.filterValues { it.size == 1 }
-        val times = singles.keys.sorted()
-        val sameSims = mutableListOf<Float>()
-        for (i in 0 until times.size - 1) {
-            if (times[i + 1] - times[i] != ProcessingConfig.FRAME_INTERVAL_MS) continue
-            sameSims += FaceEmbedder.cosineSimilarity(
-                singles.getValue(times[i]).first().embedding,
-                singles.getValue(times[i + 1]).first().embedding
-            )
-        }
-
-        val diffSims = byTime.values.filter { it.size == 2 }.map {
-            FaceEmbedder.cosineSimilarity(it[0].embedding, it[1].embedding)
-        }
-
-        Log.d(TAG, "===== EMBEDDING SANITY TEST =====")
-        Log.d(TAG, "SAME person (aas-paas ke frames)   ${stats(sameSims)}")
-        Log.d(TAG, "DIFF person (ek frame ke 2 chehre) ${stats(diffSims)}")
-    }
-
-    /** min / median / max — distribution dekhne ke liye, sirf average kaafi nahi. */
-    private fun stats(values: List<Float>): String {
-        if (values.isEmpty()) return "n=0  (koi data nahi)"
-        val s = values.sorted()
-        return "n=%d  min=%.3f  median=%.3f  max=%.3f  avg=%.3f".format(
-            s.size, s.first(), s[s.size / 2], s.last(), s.average()
-        )
-    }
-
-    /**
-     * Crash ke bajaye error SCREEN pe dikhao.
-     * Is device pe logcat mein exception dhoondhna bahut mushkil hai.
-     */
-    private fun showFailure(t: Throwable) {
-        Log.e(TAG, "processing failed", t)
-
-        // Pehli stack line jo HUMARE code se hai — wahi asli jagah batati hai
-        val where = t.stackTrace
-            .firstOrNull { it.className.startsWith("com.example.faceframe") }
-            ?.let { "${it.fileName}:${it.lineNumber}" }
-            ?: "unknown"
-
+    private fun showResult(state: ProcessingState.Done) {
         binding.progress.isVisible = false
         binding.pickButton.isEnabled = true
-        binding.status.text = buildString {
-            append("FAIL @ ").append(where).append('\n')
-            append(t::class.java.simpleName).append('\n')
-            append(t.message ?: "no message")
+        binding.pickButton.setText(R.string.pick_another)
+        binding.emptyState.isVisible = false
+        binding.collage.isVisible = true
+        binding.actions.isVisible = true
+
+        binding.status.text = getString(
+            R.string.result_summary,
+            state.people.size,
+            state.appearanceCount,
+            "%.1fs".format(state.elapsedMs / 1000.0)
+        )
+
+        binding.collage.setImageBitmap(state.collage)
+
+        // Development aid, off by default. Tap the collage to compare it against
+        // one tile per tracklet.
+        state.debugSheet?.let { sheet ->
+            var showingCollage = true
+            binding.collage.setOnClickListener {
+                showingCollage = !showingCollage
+                binding.collage.setImageBitmap(if (showingCollage) state.collage else sheet)
+            }
+        }
+
+        val name = "FaceFrame_${System.currentTimeMillis()}"
+        binding.saveButton.setOnClickListener {
+            withStoragePermission { save(state.collage, name) }
+        }
+        binding.shareButton.setOnClickListener { share(state.collage, name) }
+    }
+
+    // Encoding a 1080x1920 PNG is disk work, so not on the main thread.
+    private fun save(collage: Bitmap, name: String) {
+        lifecycleScope.launch {
+            val uri = withContext(Dispatchers.IO) {
+                MediaSaver(applicationContext).saveToGallery(collage, name)
+            }
+            snack(
+                getString(
+                    if (uri != null) R.string.saved_to_gallery else R.string.save_failed
+                )
+            )
         }
     }
 
-    private companion object {
-        const val TAG = "FaceFrame"
+    private fun share(collage: Bitmap, name: String) {
+        lifecycleScope.launch {
+            val intent = withContext(Dispatchers.IO) {
+                MediaSaver(applicationContext).shareIntent(collage, name)
+            }
+            startActivity(Intent.createChooser(intent, getString(R.string.share_collage)))
+        }
     }
+
+    // From Android 10 an app can write its own images through MediaStore with no
+    // permission at all. Below that MediaStore writes to a real file path, which
+    // does need one.
+    private fun withStoragePermission(action: () -> Unit) {
+        val needsPermission = Build.VERSION.SDK_INT < Build.VERSION_CODES.Q &&
+                ContextCompat.checkSelfPermission(
+                    this, Manifest.permission.WRITE_EXTERNAL_STORAGE
+                ) != PackageManager.PERMISSION_GRANTED
+
+        if (!needsPermission) {
+            action()
+        } else {
+            pendingSave = action
+            requestStoragePermission.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+        }
+    }
+
+    private fun snack(message: String) =
+        Snackbar.make(binding.root, message, Snackbar.LENGTH_SHORT).show()
 }

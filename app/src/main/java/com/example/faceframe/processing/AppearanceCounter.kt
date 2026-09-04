@@ -3,22 +3,15 @@ package com.example.faceframe.processing
 import com.example.faceframe.model.Segment
 
 /**
- * Ek person ke tracklets ko final "appearances" mein badalta hai.
+ * Turns one person's tracklets into their final appearance count.
  *
- * Assignment: "An appearance is one continuous visible segment: it starts when
- * a person's face becomes clearly visible and ends when it is no longer
- * clearly visible."
+ * Mostly one tracklet is one appearance. But tracking can break mid-shot on a
+ * blurry frame or when someone turns away for an instant, and counting those
+ * two halves separately would inflate the number. So anything within the gap
+ * tolerance gets stitched back together.
  *
- * Zyadatar ek tracklet = ek appearance. Par tracking beech mein toot sakti hai
- * (ek blurry frame, ya banda ek pal ke liye mud gaya). Aise do tukde time mein
- * bilkul paas hote hain, aur unhe alag ginna appearance count badha deta hai.
- *
- *   tracklet A: 5800-6800ms  ]
- *                            ]- gap sirf 400ms -> ek hi appearance
- *   tracklet B: 7200-8000ms  ]
- *
- * Ye jodna clustering ke BAAD hota hai, kyunki tabhi pakka pata hota hai ki
- * dono tukde ek hi insaan ke hain.
+ * This runs after clustering, because only then do we know the two halves
+ * belong to the same person.
  */
 object AppearanceCounter {
 
@@ -38,7 +31,6 @@ object AppearanceCounter {
         for (i in 1 until ordered.size) {
             val t = ordered[i]
             if (t.startMs - end <= gapToleranceMs) {
-                // Tooti hui tracking - wahi appearance aage badh rahi hai
                 end = t.endMs
                 frames += t.frameCount
             } else {

@@ -4,40 +4,48 @@ import android.graphics.Rect
 import com.example.faceframe.processing.ProcessingConfig
 import kotlin.math.min
 
-//complete record of the face in frame
-//timestamp,boundingBox,FloatArray,Embedding,yaw/roll/pitch, smileProb, eyeOpenProb , sharpness, faceArea
-
-
+/**
+ * One detected face in one frame — everything we need about it, and nothing
+ * that costs memory.
+ *
+ * Deliberately no bitmap here. Holding 150 decoded frames would be about
+ * 1.2 GB; 200 of these is roughly 200 KB. When actual pixels are needed again,
+ * the timestamp is enough to go back and re-read that one frame.
+ */
 data class FaceSample(
-    val timestampMs : Long,
-    val boundingBox : Rect,
-    val frameWidth : Int,
-    val frameHeight : Int,
+    val timestampMs: Long,
+    val boundingBox: Rect,
+    val frameWidth: Int,
+    val frameHeight: Int,
 
-    val embedding : FloatArray,
+    val embedding: FloatArray,
 
-    //ml kit attributes
-    val yaw : Float,
-    val pitch  : Float,
-    val roll : Float,
+    // Straight from ML Kit.
+    val yaw: Float,
+    val pitch: Float,
+    val roll: Float,
     val smileProbability: Float,
     val leftEyeOpen: Float,
     val rightEyeOpen: Float,
 
-    val sharpness : Double,
+    // Ours — ML Kit does not report sharpness.
+    val sharpness: Double,
 
-    /**
-     * Is frame me kul kitne chehre mile the.
-     * 1 se zyada = generous crop me doosra banda ghus sakta hai,
-     * isliye ShotScorer aise frames ko peeche rakhta hai.
-     */
-    val facesInFrame : Int = 1
-    ){
+    val facesInFrame: Int = 1,
+
+    // Nearest other face in the same frame, if any. The collage crop uses this
+    // to stop before it reaches the neighbour; without it a generous crop of
+    // someone who only ever appears next to somebody else pulls that somebody
+    // else into the tile.
+    val neighbourBox: Rect? = null
+) {
+    // Both eyes, so min rather than average.
     val eyesOpenScore: Float
-        get() = min(leftEyeOpen,rightEyeOpen)
+        get() = min(leftEyeOpen, rightEyeOpen)
 
-    val faceAreaRatio : Float
-    get() = (boundingBox.width().toFloat() * boundingBox.height()) / (frameWidth.toFloat() * frameHeight)
+    val faceAreaRatio: Float
+        get() = (boundingBox.width().toFloat() * boundingBox.height()) /
+                (frameWidth.toFloat() * frameHeight)
 
     val isClipped: Boolean
         get() {
@@ -48,6 +56,9 @@ data class FaceSample(
                     boundingBox.bottom >= frameHeight - m
         }
 
+    // A data class with a FloatArray needs these written out: the generated
+    // equals() compares arrays by reference, so two identical embeddings would
+    // come back unequal.
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (other !is FaceSample) return false

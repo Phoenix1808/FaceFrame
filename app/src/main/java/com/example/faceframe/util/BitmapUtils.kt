@@ -13,15 +13,20 @@ import kotlin.math.atan2
 import kotlin.math.max
 import kotlin.math.roundToInt
 
-
+/** Pure bitmap helpers. No Context, so these are unit-testable. */
 object BitmapUtils {
 
-
+    // Sharpness is measured on a shrunk copy; it is about ten times faster and
+    // the number barely moves.
     private const val SHARPNESS_SAMPLE_WIDTH = 160
 
-
-    // 1. Sharpness — Laplacian variance
-
+    /**
+     * Variance of the Laplacian, i.e. how sharp the image is.
+     *
+     * A sharp photo is full of strong edges and scores high; a blurred one is
+     * smooth and scores low. ML Kit does not report this, so we compute it, and
+     * it is what lets us throw away whip-pan frames.
+     */
     fun laplacianVariance(bitmap: Bitmap): Double {
         val scaled = scaleToWidth(bitmap, SHARPNESS_SAMPLE_WIDTH)
         val w = scaled.width
@@ -63,10 +68,14 @@ object BitmapUtils {
         return sumSq / n - mean * mean          // variance = E[x²] − E[x]²
     }
 
-    // ------------------------------------------------------------------
-    // 2. Aligned square crop — embedding model ke liye
-    // ------------------------------------------------------------------
-
+    /**
+     * Square crop with the eyes levelled, ready for the embedding model.
+     *
+     * MobileFaceNet was trained on aligned faces; feed it a tilted one and the
+     * embedding drifts far enough to cost you an identity match. One Matrix
+     * does all four steps, and anything falling outside the frame comes back
+     * black rather than throwing.
+     */
     fun alignedFaceCrop(
         source: Bitmap,
         faceRect: Rect,
@@ -80,7 +89,7 @@ object BitmapUtils {
         val side = max(faceRect.width(), faceRect.height()) * expandFactor
         val scale = outputSize / side
 
-        // Aankhon ki line kitni tirchi hai
+        // Angle of the line between the eyes.
         val angle = if (leftEye != null && rightEye != null) {
             Math.toDegrees(
                 atan2(
@@ -93,10 +102,10 @@ object BitmapUtils {
         }
 
         val matrix = Matrix().apply {
-            postTranslate(-cx, -cy)               // face center → origin
-            postRotate(-angle)                    // aankhein horizontal
-            postScale(scale, scale)               // model input size pe
-            postTranslate(outputSize / 2f, outputSize / 2f)  // wapas center
+            postTranslate(-cx, -cy)                          // face centre to origin
+            postRotate(-angle)                               // level the eyes
+            postScale(scale, scale)                          // down to model size
+            postTranslate(outputSize / 2f, outputSize / 2f)  // back to centre
         }
 
         val out = Bitmap.createBitmap(outputSize, outputSize, Bitmap.Config.ARGB_8888)
@@ -111,28 +120,37 @@ object BitmapUtils {
         return out
     }
 
-    // ------------------------------------------------------------------
-    // 3. Generous crop — collage tile ke liye
-    // ------------------------------------------------------------------
-
+    /**
+     * The collage tile crop, deliberately much wider than the face box - the
+     * assignment is explicit that tight crops give poor, low-resolution tiles.
+     */
     fun cropGenerously(
         source: Bitmap,
         faceRect: Rect,
         expandFactor: Float,
-        verticalBias: Float = 0f
+        verticalBias: Float = 0f,
+        avoid: Rect? = null
     ): Bitmap {
-        val halfW = faceRect.width() * expandFactor / 2f
+        var halfW = faceRect.width() * expandFactor / 2f
         val halfH = faceRect.height() * expandFactor / 2f
 
         val cx = faceRect.exactCenterX()
         val cy = faceRect.exactCenterY() + faceRect.height() * verticalBias
+
+        // If somebody else is standing next to this face, stop the crop at the
+        // midpoint between the two rather than sailing past into their face.
+        if (avoid != null) {
+            val gap = avoid.exactCenterX() - faceRect.exactCenterX()
+            val limit = kotlin.math.abs(gap) / 2f
+            if (limit > 0f) halfW = minOf(halfW, limit)
+        }
 
         var left = (cx - halfW).roundToInt().coerceIn(0, source.width - 1)
         var top = (cy - halfH).roundToInt().coerceIn(0, source.height - 1)
         var right = (cx + halfW).roundToInt().coerceIn(left + 1, source.width)
         var bottom = (cy + halfH).roundToInt().coerceIn(top + 1, source.height)
 
-        // Frame ke bahar nikal gaya toh doosri taraf shift karke width bachao
+        // Ran off the edge: slide the other way instead of losing the width.
         val wantedW = (halfW * 2).roundToInt()
         val wantedH = (halfH * 2).roundToInt()
         if (right - left < wantedW) {
@@ -147,18 +165,15 @@ object BitmapUtils {
         return Bitmap.createBitmap(source, left, top, right - left, bottom - top)
     }
 
-    // ------------------------------------------------------------------
-    // 4. TFLite input buffer
-    // ------------------------------------------------------------------
-
     /**
-     * Bitmap -> float32 ByteBuffer, RGB order, [-1, +1] normalized.
+     * Bitmap to a float32 buffer, RGB, normalised to [-1, +1].
      *
-     * MobileFaceNet ka expected preprocessing: (pixel - 127.5) / 128
-     * Galat normalization = bilkul bekaar embeddings, bina kisi error ke.
+     * MobileFaceNet expects (pixel - 127.5) / 128 exactly. Get the
+     * normalisation wrong and you still get embeddings, they are just useless,
+     * with nothing anywhere to tell you why.
      *
-     * `batchSize` isliye hai ki kuch models fixed batch ke saath export hote
-     * hain. Us case mein wahi chehra har batch slot mein bhar diya jata hai.
+     * batchSize is here because some models are exported with a fixed batch;
+     * the same face then goes into every slot.
      */
     fun toModelInput(bitmap: Bitmap, inputSize: Int, batchSize: Int = 1): ByteBuffer {
         val buffer = ByteBuffer
@@ -179,10 +194,9 @@ object BitmapUtils {
         return buffer
     }
 
-    // ------------------------------------------------------------------
-    // Helpers
-    // ------------------------------------------------------------------
-
+    // Both scale helpers return the ORIGINAL bitmap when it is already small
+    // enough. Check with !== before recycling the result, or you will recycle
+    // something the caller still needs.
     fun scaleToWidth(bitmap: Bitmap, targetWidth: Int): Bitmap {
         if (bitmap.width <= targetWidth) return bitmap
         val ratio = targetWidth.toFloat() / bitmap.width

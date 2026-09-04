@@ -1,35 +1,16 @@
 package com.example.faceframe.processing
 
 /**
- * Embeddings ko groups mein baantta hai - ek group = ek insaan.
+ * Agglomerative clustering with average linkage: start with everything in its
+ * own cluster, keep merging the closest pair until nothing is close enough.
  *
- * ALGORITHM: agglomerative (hierarchical) clustering, average linkage.
+ * Not K-Means, because K-Means wants the number of clusters up front and the
+ * number of people in a video is exactly what we are trying to find out.
  *
- *   1. Shuru mein har item apna alag cluster
- *   2. Sabse milte-julte do clusters dhoondo
- *   3. Unki similarity threshold se upar hai? -> merge karo, step 2 dohrao
- *   4. Nahi? -> ruk jao, ab koi merge karne layak nahi bacha
- *
- * K-Means kyun NAHI: usko pehle se batana padta hai kitne clusters banane hain.
- * Humein pata hi nahi ki video mein kitne log hain - wahi to pata karna hai.
- * (Aur "5 log hain" likh dena assignment ke "do not hardcode" ke khilaf hota.)
- * Yahan threshold khud tay karta hai kitne clusters banenge.
- *
- * AVERAGE LINKAGE kyun: do clusters ki similarity = unke saare cross-pairs ka
- * average. Single linkage (sabse best pair) mein ek galat match poore do
- * clusters ko jod deta hai - "chaining problem".
- *
- * Ye generic hai kyunki hum Tracklets cluster karte hain, per-frame samples
- * nahi. Tracklet ka embedding uske saare frames ka average hota hai, jo ek
- * frame ke embedding se kaafi zyada stable hai.
+ * Generic because we cluster Tracklets, not individual frames.
  */
 object FaceClusterer {
 
-    /**
-     * @param embeddingOf har item ka L2-normalized embedding
-     * @param minClusterSize isse chhote clusters kachra maan kar hata diye jaate hain
-     * @return clusters, har ek ke andar items input ke order mein
-     */
     fun <T> cluster(
         items: List<T>,
         threshold: Float = ProcessingConfig.SIMILARITY_THRESHOLD,
@@ -41,7 +22,6 @@ object FaceClusterer {
         val n = items.size
         val embeddings = items.map(embeddingOf)
 
-        // Har jodi ki similarity ek baar hi nikaalo - baad mein sirf padhenge.
         val pairSim = Array(n) { FloatArray(n) }
         for (i in 0 until n) {
             for (j in i + 1 until n) {
@@ -51,11 +31,9 @@ object FaceClusterer {
             }
         }
 
-        // HARD CONSTRAINT: kuch jodiyan kabhi ek nahi ho sakti, chahe unke
-        // embeddings kitne bhi milte hon. Do tracklets jo ek hi samay chal
-        // rahe hain, pakka do alag log hain - ek insaan ek waqt me do jagah
-        // nahi ho sakta. Ye baat model ke andaze se kahin zyada pakki hai,
-        // aur yahi wo galti rokti hai jahan milte-julte chehre jud jaate hain.
+        // Some pairs can never merge no matter what the embeddings say. Two
+        // tracklets running at the same instant are two different people, and
+        // that fact is a lot more reliable than the model's opinion.
         val blocked = Array(n) { i ->
             BooleanArray(n) { j -> i != j && cannotMerge(items[i], items[j]) }
         }
@@ -63,22 +41,22 @@ object FaceClusterer {
         val members = MutableList(n) { mutableListOf(it) }
         val alive = BooleanArray(n) { true }
 
-        // simSum[a][b] = cluster a aur b ke beech saari pairwise similarities ka JOD.
-        // Jod isliye (average nahi) ki merge ke waqt sirf add karna padta hai:
-        //     simSum[a+b][c] = simSum[a][c] + simSum[b][c]
-        // Average nikaalne ke liye members ki ginti se divide kar lete hain.
+        // simSum[a][b] holds the SUM of the pairwise similarities between the
+        // two clusters, not the average, because a merge is then just an
+        // addition:  simSum[a+b][c] = simSum[a][c] + simSum[b][c].
+        // Divide by the member counts when you actually need the average.
         val simSum = Array(n) { i -> pairSim[i].copyOf() }
 
         while (true) {
             var bestA = -1
             var bestB = -1
-            var bestAvg = threshold          // isse upar wala hi merge hoga
+            var bestAvg = threshold
 
             for (a in 0 until n) {
                 if (!alive[a]) continue
                 for (b in a + 1 until n) {
                     if (!alive[b]) continue
-                    if (blocked[a][b]) continue          // ek waqt me do jagah nahi
+                    if (blocked[a][b]) continue
                     val avg = simSum[a][b] / (members[a].size * members[b].size)
                     if (avg > bestAvg) {
                         bestAvg = avg
@@ -88,7 +66,7 @@ object FaceClusterer {
                 }
             }
 
-            if (bestA < 0) break             // koi jodi threshold paar nahi kar payi
+            if (bestA < 0) break
 
             members[bestA].addAll(members[bestB])
             alive[bestB] = false
@@ -97,8 +75,9 @@ object FaceClusterer {
                 simSum[bestA][c] += simSum[bestB][c]
                 simSum[c][bestA] = simSum[bestA][c]
 
-                // Constraint bhi wirasat me milti hai: agar B, C ke saath nahi
-                // ban sakta tha, to A+B bhi C ke saath nahi ban sakta.
+                // The constraint has to be inherited, otherwise it leaks away
+                // after a couple of merges: if B could not join C, then A+B
+                // cannot either.
                 if (blocked[bestB][c]) {
                     blocked[bestA][c] = true
                     blocked[c][bestA] = true

@@ -18,10 +18,10 @@ import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 
 /**
- * Video se nikala hua ek frame.
+ * One frame out of the video.
  *
- * ⚠️ CONTRACT: collect karne wala `bitmap.recycle()` karne ke liye zimmedar hai.
- * Nahi kiya toh 150 frames × ~2 MB = OOM.
+ * Whoever collects this owns the bitmap and must recycle it. 150 frames at
+ * ~2 MB each is not something you want to find out about the hard way.
  */
 data class VideoFrame(
     val bitmap: Bitmap,
@@ -29,7 +29,6 @@ data class VideoFrame(
     val index: Int
 )
 
-/** Progress bar ka total isi se aata hai. */
 data class VideoInfo(
     val durationMs: Long,
     val displayWidth: Int,
@@ -38,15 +37,13 @@ data class VideoInfo(
 )
 
 /**
- * Video ko fixed interval pe frames mein todta hai.
+ * Cuts a video into frames at a fixed interval.
  *
- * Frames ek-ek karke `Flow` se aate hain (saare ek saath nahi) — ye
- * jaan-boojh ke hai: pura video memory mein nahi aata, aur consumer
- * har frame ko process karke turant free kar sakta hai.
+ * Frames arrive one at a time through a Flow rather than as a list, so the
+ * consumer can finish with each bitmap and free it before the next one shows up.
  */
 class FrameExtractor(private val context: Context) {
 
-    /** Frames nikale bina sirf metadata padho. */
     fun readInfo(uri: Uri): VideoInfo {
         val retriever = MediaMetadataRetriever()
         return try {
@@ -58,13 +55,11 @@ class FrameExtractor(private val context: Context) {
     }
 
     /**
-     * Ek time-slice ke frames emit karta hai.
+     * Frames from one slice of the video. Cold — nothing runs until collected,
+     * and the retriever is released even if the flow is cancelled.
      *
-     * Cold flow hai - jab tak koi collect na kare, kuch nahi hota.
-     * Retriever `finally` mein release hota hai, chahe flow cancel ho jaye.
-     *
-     * `fromMs`/`toMs` isliye hain taaki kai workers video ke alag-alag
-     * hisse ek saath process kar sakein. Default = pura video.
+     * The from/to range exists so several workers can chew on different parts
+     * of the same file at once.
      */
     fun frames(
         uri: Uri,
@@ -80,14 +75,13 @@ class FrameExtractor(private val context: Context) {
             val interval = ProcessingConfig.FRAME_INTERVAL_MS
             val endMs = minOf(toMs, info.durationMs)
 
-            // Timestamps ko ek hi global grid pe align karo (0, 200, 400...).
-            // Warna workers ke beech overlap ya gap ban jayega aur
-            // appearance segmentation galat ho jayegi.
+            // Timestamps come off one global grid (0, 200, 400, ...) rather than
+            // counting up from fromMs. Otherwise the slices drift apart at the
+            // seams and you get overlaps or holes between workers.
             var index = ((fromMs + interval - 1) / interval).toInt()
             var timeMs = index * interval
 
             while (timeMs < endMs) {
-                // User ne cancel kiya ya screen band ki toh yahin ruk jao
                 currentCoroutineContext().ensureActive()
 
                 grabFrame(retriever, timeMs * 1000L, target)?.let { bitmap ->
@@ -103,22 +97,19 @@ class FrameExtractor(private val context: Context) {
     }
 
     /**
-     * `frames()` ka parallel version - production mein yahi use hota hai.
+     * The version actually used in the pipeline: split the video into slices and
+     * run one retriever per slice.
      *
-     * Video ko `workers` barabar hisson mein baant deta hai; har worker apna
-     * MediaMetadataRetriever leke alag thread pe chalta hai, aur sab ek hi
-     * Flow mein bhejte hain.
+     * Every getScaledFrameAtTime() call seeks back to the previous keyframe and
+     * decodes forward from there, which is expensive, and doing it 150 times in
+     * a row took about 110 s. Four workers bring that down, though not by four —
+     * the hardware decoder, not the CPU, turns out to be the real limit.
      *
-     * Kyun madad karta hai: har getScaledFrameAtTime() call pichle keyframe pe
-     * jump karke wahan se decode karti hai - bahut mehanga. Ek thread pe ye 150
-     * baar hone mein ~110s lagte the; chaar threads pe wahi kaam ~28s.
+     * channelFlow rather than flow because a plain flow only allows one
+     * coroutine to emit; emitting from several throws IllegalStateException.
      *
-     * `flow{}` ki jagah `channelFlow{}` isliye ki normal flow mein sirf ek
-     * coroutine emit kar sakta hai - kai threads se emit karne pe
-     * IllegalStateException aata hai.
-     *
-     * WARNING: frames ab TIME ORDER MEIN NAHI aayenge. Jise order chahiye wo
-     * `timestampMs` se sort kar le (AppearanceCounter wahi karta hai).
+     * Frames come out in no particular order. Anything that cares sorts by
+     * timestampMs — FaceTracker does.
      */
     fun parallelFrames(
         uri: Uri,
@@ -134,15 +125,13 @@ class FrameExtractor(private val context: Context) {
                 frames(uri, from, to).collect { send(it) }
             }
         }.joinAll()
-    }.buffer(ProcessingConfig.FRAME_BUFFER)   // extractors consumer ka intezaar na karein
+    }.buffer(ProcessingConfig.FRAME_BUFFER)   // so extractors do not idle on the consumer
 
     /**
-     * PASS 2 - ek hi frame, high resolution me.
+     * Pass 2: one frame, at whatever resolution the caller wants.
      *
-     * Analysis (pass 1) 720p par hoti hai kyunki 150 frames nikalne hain.
-     * Collage ke liye sirf ek frame per person chahiye, isliye wahan
-     * resolution ka kharcha uthaya ja sakta hai - aur tile jitni sharp
-     * hogi, collage utna acha lagega.
+     * Analysis runs at 720p because it has 150 frames to get through. The
+     * collage only needs one frame per person, so it can afford better.
      */
     fun frameAt(uri: Uri, timestampMs: Long, maxHeight: Int): Bitmap? {
         val retriever = MediaMetadataRetriever()
@@ -159,8 +148,6 @@ class FrameExtractor(private val context: Context) {
         }
     }
 
-    // ------------------------------------------------------------------
-
     private fun readInfoFrom(retriever: MediaMetadataRetriever): VideoInfo {
         fun meta(key: Int): Long =
             retriever.extractMetadata(key)?.toLongOrNull() ?: 0L
@@ -170,8 +157,8 @@ class FrameExtractor(private val context: Context) {
         val rawH = meta(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT).toInt()
         val rotation = meta(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION).toInt()
 
-        // Portrait videos usually 90°/270° rotation metadata ke saath aati hain,
-        // matlab stored frame landscape hai. Display dimensions swap ho jaate hain.
+        // Portrait clips are usually stored landscape with a 90 or 270 degree
+        // rotation flag, so the displayed dimensions are the stored ones swapped.
         val portraitRotated = rotation == 90 || rotation == 270
         val dispW = if (portraitRotated) rawH else rawW
         val dispH = if (portraitRotated) rawW else rawH
@@ -184,31 +171,27 @@ class FrameExtractor(private val context: Context) {
         )
     }
 
-    /** Aspect ratio bachate hue maxHeight tak chhota karo. */
+    // null means "already small enough, leave it alone".
     private fun targetSize(
         width: Int,
         height: Int,
         maxHeight: Int = ProcessingConfig.DECODE_MAX_HEIGHT
     ): Size? {
         if (width <= 0 || height <= 0) return null
-        if (height <= maxHeight) return null                 // already chhota
+        if (height <= maxHeight) return null
         val ratio = maxHeight.toFloat() / height
         return Size((width * ratio).toInt().coerceAtLeast(1), maxHeight)
     }
 
-    /**
-     * OPTION_CLOSEST use kiya hai, OPTION_CLOSEST_SYNC nahi.
-     *
-     * SYNC sirf keyframes pe jump karta hai — tez hai, par lagatar wahi frame
-     * de sakta hai. Hume exact timestamps chahiye, warna appearance boundaries
-     * galat aayengi. Thoda slow hai, par accuracy 50% marks hai.
-     */
+    // OPTION_CLOSEST, not OPTION_CLOSEST_SYNC. SYNC only lands on keyframes,
+    // which is much faster but happily returns the same frame several times in
+    // a row — and appearance boundaries would go with it.
     private fun grabFrame(
         retriever: MediaMetadataRetriever,
         timeUs: Long,
         target: Size?
     ): Bitmap? {
-        // API 27+ decode ke waqt hi scale kar deta hai — kaafi tez aur kam memory
+        // API 27+ can scale during decode, which is both faster and lighter.
         if (target != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             return retriever.getScaledFrameAtTime(
                 timeUs,
@@ -218,7 +201,6 @@ class FrameExtractor(private val context: Context) {
             )
         }
 
-        // API 26 fallback: pura frame lo, phir chhota karo
         val full = retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST)
             ?: return null
         if (target == null) return full

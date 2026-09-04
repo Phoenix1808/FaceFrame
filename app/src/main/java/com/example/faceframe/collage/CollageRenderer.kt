@@ -15,14 +15,12 @@ import kotlin.math.ceil
 import kotlin.math.max
 
 /**
- * Logon ki list ko ek share-karne layak poster me badalta hai.
+ * Draws the list of people as a poster worth sharing.
  *
- * Instagram Story ka 9:16 format (1080x1920) - assignment me isi ka
- * reference diya gaya hai, aur phone par share karne ke liye yahi sahi hai.
- *
- * Yahan Context nahi chahiye, sirf Bitmaps aur Canvas - isliye ye class
- * bina emulator ke test ki ja sakti hai, aur ise pata bhi nahi ki file
- * kahan save hogi (wo MediaSaver ka kaam hai).
+ * 1080x1920, the Instagram Story shape the assignment points at and the right
+ * one for a phone. No Context anywhere in here, just bitmaps and a Canvas, so
+ * it can be tested without a device and has no idea where the file ends up.
+ * That is MediaSaver's problem.
  */
 object CollageRenderer {
 
@@ -54,12 +52,10 @@ object CollageRenderer {
     }
 
     /**
-     * DEBUG contact sheet - har tracklet ek tile, uske time ke saath.
+     * Development aid: one tile per tracklet, labelled with its timestamps.
      *
-     * Ye submission ka hissa nahi hai. Iska maqsad ye dekhna hai ki kaun se
-     * tracklets asal me ek hi insaan ke hain - clustering sahi hai ya nahi,
-     * ye aankhon se verify karne ke liye. Bina iske hum sirf numbers ke
-     * bharose andaza lagate rahenge.
+     * The point is being able to see which tracklets are really the same
+     * person, instead of inferring it from cluster counts and hoping.
      */
     fun renderDebugSheet(tiles: List<Pair<Bitmap?, String>>): Bitmap {
         val bitmap = Bitmap.createBitmap(WIDTH, HEIGHT, Bitmap.Config.ARGB_8888)
@@ -109,8 +105,6 @@ object CollageRenderer {
         return bitmap
     }
 
-    // ------------------------------------------------------------------
-
     private fun drawBackground(canvas: Canvas) {
         val base = Paint().apply {
             shader = LinearGradient(
@@ -120,7 +114,7 @@ object CollageRenderer {
         }
         canvas.drawRect(0f, 0f, WIDTH.toFloat(), HEIGHT.toFloat(), base)
 
-        // Upar ek halki si roshni - flat gradient se zyada jaandaar lagta hai
+        // A soft glow at the top; a flat gradient looks dead by comparison.
         val glow = Paint().apply {
             shader = RadialGradient(
                 WIDTH * 0.5f, 0f, WIDTH * 0.9f,
@@ -157,8 +151,8 @@ object CollageRenderer {
     private fun drawTiles(canvas: Canvas, people: List<Person>) {
         if (people.isEmpty()) return
 
-        // Grid logon ki ginti ke hisaab se badalta hai - 5 logon ke liye 3x2
-        // theek hai, 2 ke liye bekaar. Fixed grid har video par acha nahi dikhta.
+        // The grid follows the headcount. Two columns suits five people; a
+        // fixed grid looks wrong the moment a video has a different number.
         val columns = when {
             people.size == 1 -> 1
             people.size <= 6 -> 2
@@ -178,8 +172,7 @@ object CollageRenderer {
             val row = index / columns
             val column = index % columns
 
-            // Aakhri row me agar tiles kam hain to unhe beech me le aao,
-            // warna poster ek taraf jhuka hua lagta hai.
+            // Centre a short last row, otherwise the poster leans left.
             val inThisRow = minOf(columns, people.size - row * columns)
             val rowWidth = inThisRow * tileWidth + (inThisRow - 1) * GAP
             val rowLeft = (WIDTH - rowWidth) / 2f
@@ -206,7 +199,7 @@ object CollageRenderer {
             canvas.drawColor(TILE_EMPTY)
         }
 
-        // Neeche kaala fade - iske bina text photo ke upar padhne layak nahi rehta
+        // Dark fade at the bottom, or the label is unreadable over the photo.
         val scrimTop = rect.bottom - rect.height() * 0.44f
         val scrim = Paint().apply {
             shader = LinearGradient(
@@ -224,8 +217,8 @@ object CollageRenderer {
         }
         canvas.drawPath(shape, border)
 
-        // Text ka size tile ke hisaab se - warna 2 logon wale collage me
-        // chhota aur 9 logon wale me bahut bada lagta hai
+        // Text scales with the tile, so it is not tiny in a two-person collage
+        // and enormous in a nine-person one.
         val namePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.WHITE
             textSize = rect.width() * 0.088f
@@ -253,11 +246,10 @@ object CollageRenderer {
     }
 
     /**
-     * Photo ko tile me "cover" ki tarah bharta hai - stretch nahi karta.
+     * Fills the tile without distorting the photo.
      *
-     * Vertical alignment thoda upar rakha hai (35%, beech ke 50% nahi):
-     * generous crop me chehra upar ki taraf hota hai, aur seedha center
-     * karne se sar kat jaata hai.
+     * Anchored at 35% rather than centred: in a generous crop the face sits
+     * high, and centring lops off the top of the head.
      */
     private fun drawCover(canvas: Canvas, bitmap: Bitmap, dst: RectF) {
         val scale = max(dst.width() / bitmap.width, dst.height() / bitmap.height)

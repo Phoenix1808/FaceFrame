@@ -13,3 +13,8 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# Android Studio project settings - machine specific
+/.idea
+/.kotlin
+*.hprof
