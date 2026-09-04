@@ -1,15 +1,23 @@
 <resources>
     <string name="app_name">FaceFrame</string>
+    <string name="tagline">Find everyone in a video</string>
 
     <string name="pick_video">Pick a video</string>
-    <string name="processing">Processing…</string>
-    <string name="people_found">%1$d people found</string>
-    <string name="appearance_count">%1$d appearances</string>
-    <string name="make_collage">Create collage</string>
+    <string name="pick_another">Pick another video</string>
+    <string name="empty_title">No video yet</string>
+    <string name="empty_body">Choose a portrait clip and FaceFrame will find every person in it, count their appearances and build a collage.</string>
+
+    <string name="processing">Grouping faces…</string>
+    <string name="building_collage">Building collage…</string>
+    <string name="frame_progress">Frame %1$d of %2$d · %3$d faces</string>
+    <string name="result_summary">%1$d people · %2$d appearances · %3$s</string>
 
     <string name="save_to_gallery">Save</string>
     <string name="share">Share</string>
-    <string name="saved_to_gallery">Saved to gallery</string>
+    <string name="saved_to_gallery">Saved to Pictures/FaceFrame</string>
+    <string name="save_failed">Could not save the collage</string>
     <string name="share_collage">Share collage</string>
+    <string name="permission_denied">Storage permission is needed to save</string>
+    <string name="collage_description">Collage of the people found in the video</string>
     <string name="error_generic">Something went wrong: %1$s</string>
 </resources>

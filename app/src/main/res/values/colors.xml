@@ -2,9 +2,19 @@
 <resources>
     <color name="white">#FFFFFFFF</color>
     <color name="black">#FF000000</color>
-    <color name="bg_dark">#FF121212</color>
-    <color name="surface_dark">#FF1E1E1E</color>
-    <color name="brand_primary">#FF7C4DFF</color>
-    <color name="brand_accent">#FF00E5A0</color>
-    <color name="text_secondary">#FFB0B0B0</color>
+
+    <!-- Same family as the collage, so the app and its output look related. -->
+    <color name="bg_top">#FF1B1231</color>
+    <color name="bg_bottom">#FF0A0A11</color>
+    <color name="bg_dark">#FF0D0B14</color>
+    <color name="surface">#FF1E1930</color>
+    <color name="surface_alt">#FF272138</color>
+
+    <color name="brand">#FF8B6BFF</color>
+    <color name="brand_dark">#FF6B45E6</color>
+    <color name="accent">#FF00E5A0</color>
+
+    <color name="text_primary">#FFF3F1FA</color>
+    <color name="text_secondary">#FF9A94AD</color>
+    <color name="stroke">#22FFFFFF</color>
 </resources>
