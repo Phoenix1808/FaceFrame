@@ -2,7 +2,7 @@ package com.example.faceframe.model
 
 import android.graphics.Bitmap
 
-/** One continuous stretch where a person is visible. */
+
 
 data class Segment(
     val startMs : Long,
