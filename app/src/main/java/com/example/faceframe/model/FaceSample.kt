@@ -4,14 +4,6 @@ import android.graphics.Rect
 import com.example.faceframe.processing.ProcessingConfig
 import kotlin.math.min
 
-/**
- * One detected face in one frame — everything we need about it, and nothing
- * that costs memory.
- *
- * Deliberately no bitmap here. Holding 150 decoded frames would be about
- * 1.2 GB; 200 of these is roughly 200 KB. When actual pixels are needed again,
- * the timestamp is enough to go back and re-read that one frame.
- */
 data class FaceSample(
     val timestampMs: Long,
     val boundingBox: Rect,
