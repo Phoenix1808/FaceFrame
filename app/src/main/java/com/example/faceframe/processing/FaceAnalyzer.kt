@@ -63,17 +63,7 @@ class FaceAnalyzer : Closeable {
         return true
     }
 
-    /**
-     * Drops duplicate boxes on the same face.
-     *
-     * ML Kit occasionally returns two or three overlapping boxes for one face.
-     * Each becomes its own detection, then its own tracklet, and because those
-     * tracklets run at the same instant the clustering constraint decides they
-     * must be different people — so one person shows up two or three times in
-     * the collage. Took a while to work that one out.
-     *
-     * Keeps the largest box, which is most likely to hold the whole face.
-     */
+    
     fun deduplicate(faces: List<Face>): List<Face> {
         if (faces.size < 2) return faces
 
