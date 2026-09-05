@@ -15,17 +15,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 
-/**
- * Runs the whole thing, from a video URI to a finished collage.
- *
- * Every other class here does one job and knows nothing about the others.
- * This is the only place that puts them in order, which is what makes them
- * testable in isolation and lets the whole flow be read in one file.
- *
- * Returns a Flow of states rather than a list of people because the work takes
- * around two minutes and the UI has to show something while it happens. Cold,
- * and flowOn(Default) keeps the heavy work off whatever thread collects it.
- */
+
 class VideoProcessor(private val context: Context) {
 
     fun process(uri: Uri): Flow<ProcessingState> = flow {
@@ -184,11 +174,7 @@ class VideoProcessor(private val context: Context) {
             .also(::logPeople)
     }
 
-    // ---- pass 2: re-read just the frames that make it into the collage ----
-
-    // Pass 1 threw every bitmap away, so the chosen frame has to be fetched
-    // again. There are only a handful, so this time we can afford the
-    // resolution, and a sharper tile makes a visibly better collage.
+   
     private fun attachShot(extractor: FrameExtractor, uri: Uri, person: Person): Person {
         val best = person.bestSample
         val frame = extractor.frameAt(
@@ -242,16 +228,7 @@ class VideoProcessor(private val context: Context) {
         )
     }
 
-    // ---- diagnostics ----
-
-    /**
-     * Are the embeddings actually separating people?
-     *
-     * The video supplies its own ground truth, no labelling needed. Two frames
-     * 200 ms apart are almost always the same person; two faces in one frame
-     * are definitely not. The gap between those two numbers is the room
-     * clustering has to work in — if they meet, no threshold can help.
-     */
+ 
     private fun logSeparation(samples: List<FaceSample>) {
         val byTime = samples.groupBy { it.timestampMs }
 
