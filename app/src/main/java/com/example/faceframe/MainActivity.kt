@@ -23,13 +23,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/**
- * The whole app is one screen: pick a video, watch it work, look at the
- * collage, save or share it.
- *
- * No processing happens here — that is VideoProcessor, driven by
- * MainViewModel. This class only turns ProcessingState into pixels.
- */
+
 class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
@@ -56,9 +50,7 @@ class MainActivity : AppCompatActivity() {
 
         binding.pickButton.setOnClickListener { pickVideo.launch("video/*") }
 
-        // repeatOnLifecycle stops collecting while the screen is in the
-        // background and picks up again on return, so we are not updating views
-        // nobody is looking at.
+     
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 viewModel.state.collect(::render)
@@ -77,8 +69,6 @@ class MainActivity : AppCompatActivity() {
             )
         )
 
-        // Both of these are quick, and there is no sensible percentage for
-        // them, so the bar just spins instead of pretending to know.
         is ProcessingState.Grouping ->
             showProgress(null, getString(R.string.processing))
 
@@ -125,8 +115,7 @@ class MainActivity : AppCompatActivity() {
 
         binding.collage.setImageBitmap(state.collage)
 
-        // Development aid, off by default. Tap the collage to compare it against
-        // one tile per tracklet.
+     
         state.debugSheet?.let { sheet ->
             var showingCollage = true
             binding.collage.setOnClickListener {
@@ -142,7 +131,7 @@ class MainActivity : AppCompatActivity() {
         binding.shareButton.setOnClickListener { share(state.collage, name) }
     }
 
-    // Encoding a 1080x1920 PNG is disk work, so not on the main thread.
+
     private fun save(collage: Bitmap, name: String) {
         lifecycleScope.launch {
             val uri = withContext(Dispatchers.IO) {
@@ -165,9 +154,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // From Android 10 an app can write its own images through MediaStore with no
-    // permission at all. Below that MediaStore writes to a real file path, which
-    // does need one.
+
     private fun withStoragePermission(action: () -> Unit) {
         val needsPermission = Build.VERSION.SDK_INT < Build.VERSION_CODES.Q &&
                 ContextCompat.checkSelfPermission(
