@@ -14,17 +14,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.launch
 
-/**
- * Owns the processing run.
- *
- * This cannot live in the Activity. The work takes about two minutes, and
- * rotating the phone destroys and recreates the Activity underneath it. A
- * ViewModel survives that, so the run carries on and the new Activity picks up
- * whatever state it is in.
- *
- * viewModelScope is cancelled when the ViewModel is genuinely finished with,
- * i.e. when the user leaves the screen, and not on a rotation.
- */
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _state = MutableStateFlow<ProcessingState>(ProcessingState.Idle)
