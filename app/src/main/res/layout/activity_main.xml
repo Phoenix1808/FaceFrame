@@ -11,7 +11,6 @@
     android:paddingTop="16dp"
     android:paddingBottom="20dp">
 
-    <!-- header -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -49,7 +48,6 @@
         </LinearLayout>
     </LinearLayout>
 
-    <!-- content: empty state, or the collage once there is one -->
     <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="0dp"
@@ -103,7 +101,6 @@
             tools:visibility="visible" />
     </FrameLayout>
 
-    <!-- status line + progress -->
     <TextView
         android:id="@+id/status"
         android:layout_width="match_parent"
@@ -125,7 +122,7 @@
         app:trackCornerRadius="4dp"
         app:trackThickness="6dp" />
 
-    <!-- actions -->
+
     <com.google.android.material.button.MaterialButton
         android:id="@+id/pickButton"
         android:layout_width="match_parent"
