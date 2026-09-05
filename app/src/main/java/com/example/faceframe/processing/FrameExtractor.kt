@@ -54,13 +54,7 @@ class FrameExtractor(private val context: Context) {
         }
     }
 
-    /**
-     * Frames from one slice of the video. Cold — nothing runs until collected,
-     * and the retriever is released even if the flow is cancelled.
-     *
-     * The from/to range exists so several workers can chew on different parts
-     * of the same file at once.
-     */
+   
     fun frames(
         uri: Uri,
         fromMs: Long = 0L,
@@ -96,21 +90,8 @@ class FrameExtractor(private val context: Context) {
         }
     }
 
-    /**
-     * The version actually used in the pipeline: split the video into slices and
-     * run one retriever per slice.
-     *
-     * Every getScaledFrameAtTime() call seeks back to the previous keyframe and
-     * decodes forward from there, which is expensive, and doing it 150 times in
-     * a row took about 110 s. Four workers bring that down, though not by four —
-     * the hardware decoder, not the CPU, turns out to be the real limit.
-     *
-     * channelFlow rather than flow because a plain flow only allows one
-     * coroutine to emit; emitting from several throws IllegalStateException.
-     *
-     * Frames come out in no particular order. Anything that cares sorts by
-     * timestampMs — FaceTracker does.
-     */
+ 
+     
     fun parallelFrames(
         uri: Uri,
         workers: Int = ProcessingConfig.EXTRACTOR_WORKERS
