@@ -69,17 +69,6 @@ class MediaSaver(private val context: Context) {
         return uri
     }
 
-    /**
-     * Intent for the standard share sheet.
-     *
-     * Writes to the cache, not the gallery. Sharing something is no reason to
-     * fill up somebody else's photos.
-     *
-     * FileProvider is not optional here: since Android 7, handing another app a
-     * file:// URI throws FileUriExposedException. It swaps in a content:// URI
-     * instead, and FLAG_GRANT_READ_URI_PERMISSION gives the receiving app
-     * one-off read access. res/xml/file_paths.xml lists what may be shared.
-     */
     fun shareIntent(bitmap: Bitmap, displayName: String): Intent {
         val folder = File(context.cacheDir, "collages").apply { mkdirs() }
         val file = File(folder, "$displayName.png")
