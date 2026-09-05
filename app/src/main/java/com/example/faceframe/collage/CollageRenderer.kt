@@ -16,7 +16,6 @@ import kotlin.math.max
 
 /**
  * Draws the list of people as a poster worth sharing.
- *
  * 1080x1920, the Instagram Story shape the assignment points at and the right
  * one for a phone. No Context anywhere in here, just bitmaps and a Canvas, so
  * it can be tested without a device and has no idea where the file ends up.
@@ -51,12 +50,10 @@ object CollageRenderer {
         return bitmap
     }
 
-    /**
-     * Development aid: one tile per tracklet, labelled with its timestamps.
-     *
-     * The point is being able to see which tracklets are really the same
-     * person, instead of inferring it from cluster counts and hoping.
-     */
+   
+     // The point is being able to see which tracklets are really the same
+     // person, instead of inferring it from cluster counts and hoping.
+    
     fun renderDebugSheet(tiles: List<Pair<Bitmap?, String>>): Bitmap {
         val bitmap = Bitmap.createBitmap(WIDTH, HEIGHT, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
